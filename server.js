@@ -264,74 +264,73 @@ app.post('/api/users', authMiddleware, async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', authMiddleware, async (req, res) => {
+app.post('/api/resend-verification', authMiddleware, async (req, res) => {
+  const db = await initDb();
+  const user = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+  if (!user) return res.status(404).json({ error: 'not found' });
+  if (user.verified) return res.status(400).json({ error: 'already verified' });
+  const crypto = require('crypto');
+  const token = crypto.randomBytes(24).toString('hex');
+  await db.run('UPDATE users SET verification_token=? WHERE id=?', [token, user.id]);
+  const base = req.protocol + '://' + req.get('host');
+  await sendVerificationEmail(user.email, user.name, token, base);
+  res.json({ ok: true });
+});
+
+app.get('/verify', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).send('Missing token');
+  const db = await initDb();
+  const user = await db.get('SELECT * FROM users WHERE verification_token = ?', [token]);
+  if (!user) return res.status(400).send('<h3>טוקן לא תקין</h3>');
+  await db.run('UPDATE users SET verified=1, verification_token=NULL WHERE id=?', [user.id]);
+  res.send('<h3>האימייל אושר בהצלחה — ניתן לסגור חלון זה.</h3>');
+});
+
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'email,password required' });
+  const db = await initDb();
+  const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  const ok = await bcrypt.compare(password, user.password_hash);
+  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  const token = jwt.sign({ id: user.id, email: user.email, name: user.name, is_admin: !!user.is_admin, verified: !!user.verified }, JWT_SECRET, { expiresIn: '12h' });
+  res.json({ token });
+});
+
+app.post('/api/users/:id/resend', authMiddleware, async (req, res) => {
   if (!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
   const { id } = req.params;
   const db = await initDb();
   const user = await db.get('SELECT * FROM users WHERE id = ?', [id]);
   if (!user) return res.status(404).json({ error: 'not found' });
-  try{
-    // check if this user has direct children
-    const cntRow = await db.get('SELECT COUNT(*) as cnt FROM users WHERE parent_id = ?', [id]);
-    const childrenCount = (cntRow && cntRow.cnt) ? cntRow.cnt : 0;
-    if(childrenCount > 0){
-      // do NOT delete the user row. Instead clear their public emails so UI shows "no email".
-      try{
-        const placeholder = `deleted+${id}+${Date.now()}@example.invalid`;
-        await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder, JSON.stringify([]), id]);
-        await notifyAdmin(`User marked as no-email (has ${childrenCount} children): ${user.name} <${user.email}>`);
-        return res.json({ ok: true, note: 'has_children_marked_no_email' });
-      }catch(uErr){
-        console.error('Failed to mark user no-email:', uErr && uErr.message ? uErr.message : uErr);
-        return res.status(500).json({ error: uErr.message || 'failed to mark no-email' });
-      }
-    }
-
-    // No children: perform deletion flow (orphaning and parents cleanup then delete)
-    await db.run('UPDATE users SET parent_id = NULL WHERE parent_id = ?', [id]);
-    // remove from parents JSON arrays
-    const children = await db.all('SELECT id, parents FROM users WHERE parents IS NOT NULL');
-    for(const c of children){
-      try{
-        const arr = c.parents ? JSON.parse(c.parents) : [];
-        const newArr = arr.filter(x=>String(x) !== String(id));
-        if(newArr.length !== arr.length) await db.run('UPDATE users SET parents = ? WHERE id = ?', [JSON.stringify(newArr), c.id]);
-      }catch(e){}
-    }
-
-    try{
-      await db.run('DELETE FROM users WHERE id = ?', [id]);
-    }catch(delErr){
-      // handle potential UNIQUE constraint issues (e.g., duplicate empty emails)
-      console.error('Delete user failed, attempting fallback cleanup:', delErr && delErr.message ? delErr.message : delErr);
-      if(String(delErr && delErr.message || '').includes('UNIQUE constraint')){
-        try{
-          const placeholder = `deleted+${id}+${Date.now()}@example.invalid`;
-          await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder, JSON.stringify([]), id]);
-          await db.run('DELETE FROM users WHERE id = ?', [id]);
-        }catch(fallbackErr){
-          console.error('Fallback delete also failed:', fallbackErr && fallbackErr.message ? fallbackErr.message : fallbackErr);
-          throw fallbackErr;
-        }
-      } else {
-        throw delErr;
-      }
-    }
-
-    await notifyAdmin(`User removed: ${user.name} <${user.email}>`);
-    return res.json({ ok: true });
-  }catch(e){
-    return res.status(500).json({ error: e.message });
-  }
+  if (user.verified) return res.status(400).json({ error: 'already verified' });
+  const crypto = require('crypto');
+  const token = crypto.randomBytes(24).toString('hex');
+  await db.run('UPDATE users SET verification_token=? WHERE id=?', [token, user.id]);
+  const base = req.protocol + '://' + req.get('host');
+  await sendVerificationEmail(user.email, user.name, token, base);
+  res.json({ ok: true });
 });
-//   }
-//  else {
-//     rows = await db.all('SELECT id,name,email,is_admin,verified,parent,grandparent,parent_id,parents,emails FROM users ORDER BY name');
-//   }
-//   // parse parents JSON for each row
-//   rows.forEach(r=>{ try{ r.parents = r.parents ? JSON.parse(r.parents) : []; }catch(e){ r.parents = []; } try{ r.emails = r.emails ? JSON.parse(r.emails) : (r.email ? [r.email] : []); }catch(e){ r.emails = r.email ? [r.email] : []; } r.email = (r.emails && r.emails.length) ? r.emails[0] : ''; });
-//   res.json(rows);
-// });
+
+app.get('/api/users', authMiddleware, async (req, res) => {
+  const db = await initDb();
+  const q = req.query.q;
+  const parent_id = req.query.parent_id;
+  let rows;
+  if (parent_id) {
+    // return direct children of given parent_id (lazy-load)
+    rows = await db.all('SELECT id,name,email,is_admin,verified,parent,grandparent,parent_id,parents,emails FROM users WHERE parent_id = ? ORDER BY name', [parent_id]);
+  } else if (q) {
+    rows = await db.all("SELECT id,name,email,is_admin,verified,parent,grandparent,parent_id,parents,emails FROM users WHERE name LIKE '%'||?||'%' OR email LIKE '%'||?||'%' ORDER BY name", [q, q]);
+  } else {
+    rows = await db.all('SELECT id,name,email,is_admin,verified,parent,grandparent,parent_id,parents,emails FROM users ORDER BY name');
+  }
+  // parse parents JSON for each row
+  rows.forEach(r=>{ try{ r.parents = r.parents ? JSON.parse(r.parents) : []; }catch(e){ r.parents = []; } try{ r.emails = r.emails ? JSON.parse(r.emails) : (r.email ? [r.email] : []); }catch(e){ r.emails = r.email ? [r.email] : []; } r.email = r.emails && r.emails.length ? r.emails[0] : r.email; });
+  res.json(rows);
+});
 
 app.put('/api/users/:id', authMiddleware, async (req, res) => {
   if (!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
