@@ -181,7 +181,9 @@ function renderNode(node, depth = 0){
   const info = document.createElement('div');
   info.style.flex = '1';
   const ver = node.verified ? '<span class="badge bg-success ms-2">מאושר</span>' : '<span class="badge bg-warning text-dark ms-2">לא מאושר</span>';
-  info.innerHTML = `<div class="node-title">${escapeHtml(node.name)} <span class="node-count">${(node.children?node.children.length:0)}</span> ${ver}</div><div class="node-meta">${escapeHtml(node.email)}</div>`;
+  const isPlaceholder = node.email && /^deleted\+\d+\+/.test(node.email);
+  const emailHtml = (!node.email || isPlaceholder) ? '<span class="text-danger">🔴 אין מייל</span>' : escapeHtml(node.email);
+  info.innerHTML = `<div class="node-title">${escapeHtml(node.name)} <span class="node-count">${(node.children?node.children.length:0)}</span> ${ver}</div><div class="node-meta">${emailHtml}</div>`;
 
   const controls = document.createElement('div');
   controls.className = 'node-controls';

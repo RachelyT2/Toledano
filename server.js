@@ -388,8 +388,41 @@ app.delete('/api/users/:id', authMiddleware, async (req, res) => {
   const db = await initDb();
   const user = await db.get('SELECT * FROM users WHERE id = ?', [id]);
   if (!user) return res.status(404).json({ error: 'not found' });
-  // Deletion policy A: move children to parent_id = NULL and remove from parents arrays
-  try {
+  // If this user has children, do NOT delete the row. Instead clear email(s) so UI shows "no email".
+  try{
+    const all = await db.all('SELECT id,parent_id,parents FROM users');
+    let hasChildren = false;
+    for(const r of all){
+      if(String(r.parent_id) === String(id)) { hasChildren = true; break; }
+      if(r.parents){
+        try{
+          const arr = typeof r.parents === 'string' ? JSON.parse(r.parents) : r.parents;
+          if(Array.isArray(arr) && arr.map(x=>String(x)).includes(String(id))){ hasChildren = true; break; }
+        }catch(e){}
+      }
+    }
+
+    if(hasChildren){
+      // keep the user row, but set a unique placeholder email and clear emails so UI shows "no email"
+      try{
+        const placeholder = `deleted+${id}+${Date.now()}@example.invalid`;
+        await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder, JSON.stringify([]), id]);
+        await notifyAdmin(`User marked no-email (has children): ${user.name} (id:${id})`);
+        return res.json({ ok:true, replaced:true });
+      }catch(updErr){
+        console.error('Failed to mark user no-email (fallback):', updErr && updErr.message ? updErr.message : updErr);
+        // If update fails due to UNIQUE constraint, try alternative placeholder with random suffix
+        if(String(updErr && updErr.message || '').includes('UNIQUE constraint')){
+          const placeholder2 = `deleted+${id}+${Date.now()}+${Math.floor(Math.random()*100000)}@example.invalid`;
+          await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder2, JSON.stringify([]), id]);
+          await notifyAdmin(`User marked no-email (has children, fallback): ${user.name} (id:${id})`);
+          return res.json({ ok:true, replaced:true });
+        }
+        throw updErr;
+      }
+    }
+
+    // No children -> proceed to orphan any references and delete
     await db.run('UPDATE users SET parent_id = NULL WHERE parent_id = ?', [id]);
     // remove from parents JSON arrays
     const children = await db.all('SELECT id, parents FROM users WHERE parents IS NOT NULL');
@@ -407,7 +440,6 @@ app.delete('/api/users/:id', authMiddleware, async (req, res) => {
       console.error('Delete user failed, attempting fallback cleanup:', delErr && delErr.message ? delErr.message : delErr);
       if(String(delErr && delErr.message || '').includes('UNIQUE constraint')){
         try{
-          const crypto = require('crypto');
           const placeholder = `deleted+${id}+${Date.now()}@example.invalid`;
           await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder, JSON.stringify([]), id]);
           await db.run('DELETE FROM users WHERE id = ?', [id]);

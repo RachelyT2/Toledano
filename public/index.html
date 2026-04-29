@@ -277,10 +277,12 @@ async function loadUsers(q){
 
     const info = document.createElement('div');
     info.style.flex = '1';
-    const rel = (node.parent? 'בן של ' + escapeHtml(node.parent) : '') + (node.grandparent? ' | נכד של ' + escapeHtml(node.grandparent) : '');
-    let emailsHtml = '';
-    try{ if(node.emails && node.emails.length>1){ emailsHtml = '<div class="small text-muted">כתובות נוספות: ' + node.emails.map(e=>escapeHtml(e)).join(', ') + '</div>'; } }catch(e){}
-    info.innerHTML = `<div class="node-title">${escapeHtml(node.name)} <div class="node-meta d-inline">&lt;${escapeHtml(node.email)}&gt;</div></div><div class="node-meta">${rel}</div>` + emailsHtml;
+      const rel = (node.parent? 'בן של ' + escapeHtml(node.parent) : '') + (node.grandparent? ' | נכד של ' + escapeHtml(node.grandparent) : '');
+      let emailsHtml = '';
+      try{ if(node.emails && node.emails.length>1){ emailsHtml = '<div class="small text-muted">כתובות נוס: ' + node.emails.map(e=>escapeHtml(e)).join(', ') + '</div>'; } }catch(e){}
+      const isPlaceholder = node.email && /^deleted\+\d+\+/.test(node.email);
+      const emailDisplay = (node.email && !isPlaceholder) ? `&lt;${escapeHtml(node.email)}&gt;` : `<span class="no-email">🔴 ללא מייל משויך</span>`;
+      info.innerHTML = `<div class="node-title">${escapeHtml(node.name)} <div class="node-meta d-inline">${emailDisplay}</div></div><div class="node-meta">${rel}</div>` + emailsHtml;
 
     const controls = document.createElement('div');
     const checkbox = document.createElement('input'); checkbox.type='checkbox'; checkbox.value = node.id; checkbox.className='form-check-input me-2';
