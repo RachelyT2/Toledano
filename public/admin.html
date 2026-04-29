@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>מנהל - רשימת אימיילים</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    /* Family tree styles */
+    .family-tree { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+    .tree-node { display: block; border-radius: 8px; overflow: hidden; }
+    .node-row { display:flex; align-items:center; gap:12px; padding:10px; }
+    .node-card { background: #ffffff; border: 1px solid #e6e9ee; box-shadow: 0 1px 2px rgba(16,24,40,0.04); border-radius:8px; }
+    .node-title { font-weight:600; margin:0; }
+    .node-meta { color:#6b7280; font-size:0.85rem; }
+    .node-controls button{ margin-left:6px; }
+    .children { margin-right:20px; margin-top:8px; }
+    .toggle-btn { width:28px; height:28px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; background:transparent; }
+    .toggle-icon { transition: transform .18s ease; }
+    .collapsed > .node-card .toggle-icon { transform: rotate(-90deg); }
+    .collapsed > .children { display: none; }
+    .node-count { font-size:0.75rem; color:#374151; background:#f1f5f9; padding:2px 6px; border-radius:12px; margin-left:8px; }
+    /* soft pastel backgrounds by tree depth */
+    .level-0 .node-card { background:#eef6ff; border-color:#d6e9ff; }
+    .level-1 .node-card { background:#f0fdf4; border-color:#d1f7dc; }
+    .level-2 .node-card { background:#fff7ed; border-color:#ffe7cc; }
+    .level-3 .node-card { background:#f5f3ff; border-color:#e7e0ff; }
+    .level-4 .node-card { background:#fffaf0; border-color:#f7ecd7; }
+  </style>
+</head>
+<body class="bg-white">
+<main class="container py-4">
+  <h1>ניהול רשימת משפחה</h1>
+  <div class="mb-3" id="loginBox">
+    <label class="form-label">התחבר כמנהל</label>
+    <input id="adminEmail" class="form-control mb-2" placeholder="אימייל מנהל" autocomplete="username">
+    <div class="input-group">
+      <input id="adminPassword" type="password" class="form-control" placeholder="סיסמה" autocomplete="current-password">
+      <button class="btn btn-outline-secondary" type="button" id="toggleAdminPassword">הצג</button>
+    </div>
+    <div class="mt-2">
+      <button id="adminLogin" class="btn btn-primary">התחבר</button>
+      <button id="adminLogout" class="btn btn-secondary d-none">התנתק</button>
+    </div>
+    <div id="loginError" class="mt-2 text-danger small" role="alert"></div>
+  </div>
+
+  <div id="panel" class="d-none">
+    <div class="mb-3">
+      <label class="form-label">חפש</label>
+      <input id="q" class="form-control">
+    </div>
+    <div class="card mb-3 p-3">
+      <h5>הוספת משתמש חדש</h5>
+      <div class="mb-2">
+        <input id="newName" class="form-control" placeholder="שם">
+      </div>
+      <div class="mb-2">
+        <input id="newEmail" class="form-control" placeholder="אימייל">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">הורה (בחר הורה בעץ)</label>
+        <select id="newParentSelect" class="form-select">
+          <option value="">--- ללא הורה ---</option>
+        </select>
+      </div>
+      <div class="mb-2 form-check form-switch">
+        <input id="newIsAdmin" type="checkbox" class="form-check-input">
+        <label class="form-check-label">הרשאת מנהל</label>
+      </div>
+      <button id="addBtn" class="btn btn-success">הוסף</button>
+      <div id="addResult" class="mt-2 small"></div>
+    </div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<script>
+let token = null;
+
+function isTokenValidRaw(tok){
+  try{
+    const p = JSON.parse(atob(tok.split('.')[1]));
+    return !(p.exp && p.exp * 1000 < Date.now());
+  }catch(e){ return false; }
+}
+
+async function validateStoredTokenAndInit(){
+  const stored = localStorage.getItem('fi_admin_token');
+  if(!stored || !isTokenValidRaw(stored)){ localStorage.removeItem('fi_admin_token'); setToken(null); return; }
+  try{
+    const res = await fetch('/api/users',{ headers: { authorization: 'Bearer '+stored } });
+    if(res.ok) setToken(stored); else { localStorage.removeItem('fi_admin_token'); setToken(null); }
+  }catch(e){ localStorage.removeItem('fi_admin_token'); setToken(null); }
+}
+
+async function apiFetch(url, opts = {}){
+  opts.headers = opts.headers || {};
+  if(token) opts.headers.authorization = 'Bearer '+token;
+  const res = await fetch(url, opts);
+  if(res.status === 401){
+    localStorage.removeItem('fi_admin_token');
+    setToken(null);
+    throw new Error('unauthorized');
+  }
+  return res;
+}
+
+function setToken(t){
+  token = t;
+  if(t){
+    localStorage.setItem('fi_admin_token', t);
+    document.getElementById('loginBox').classList.add('d-none');
+    document.getElementById('adminLogout').classList.remove('d-none');
+    document.getElementById('panel').classList.remove('d-none');
+    load();
+  } else {
+    localStorage.removeItem('fi_admin_token');
+    document.getElementById('loginBox').classList.remove('d-none');
+    document.getElementById('adminLogout').classList.add('d-none');
+    document.getElementById('panel').classList.add('d-none');
+  }
+}
+
+document.getElementById('adminLogin').addEventListener('click', async ()=>{
+  const email = document.getElementById('adminEmail').value.trim();
+  const password = document.getElementById('adminPassword').value;
+  document.getElementById('loginError').textContent = '';
+  if(!email || !password){ document.getElementById('loginError').textContent = 'מלא אימייל וסיסמה'; return; }
+  try{
+    const res = await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,password})});
+    const j = await res.json();
+    if(!res.ok){ document.getElementById('loginError').textContent = j.error||j.detail||'שגיאת התחברות'; return; }
+    const payload = JSON.parse(atob(j.token.split('.')[1]));
+    if(!payload.is_admin){ document.getElementById('loginError').textContent = 'דרוש חשבון מנהל'; return; }
+    setToken(j.token);
+  }catch(err){ document.getElementById('loginError').textContent = 'שגיאת רשת'; }
+});
+
+// toggle admin password visibility
+document.getElementById('toggleAdminPassword').addEventListener('click', ()=>{
+  const inp = document.getElementById('adminPassword');
+  const btn = document.getElementById('toggleAdminPassword');
+  if(inp.type === 'password'){ inp.type = 'text'; btn.textContent = 'הסתר'; }
+  else { inp.type = 'password'; btn.textContent = 'הצג'; }
+});
+
+document.getElementById('adminLogout').addEventListener('click', ()=> setToken(null));
+
+// validate stored token and initialize (will call setToken or clear it)
+validateStoredTokenAndInit();
+
+document.getElementById('q').addEventListener('input', ()=>load());
+
+function buildTree(items){
+  const map = {};
+  items.forEach(i=>{ i.children = []; map[i.id]=i; });
+  const roots = [];
+  items.forEach(i=>{
+    if(i.parent_id){
+      const p = map[i.parent_id];
+      if(p) p.children.push(i); else roots.push(i);
+    } else roots.push(i);
+  });
+  return roots;
+}
+
+function renderNode(node, depth = 0){
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tree-node mb-2 level-' + Math.min(depth,4);
+
+  const card = document.createElement('div');
+  card.className = 'node-card node-row';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'toggle-btn';
+  toggle.setAttribute('aria-expanded','true');
+  toggle.innerHTML = `<svg class="toggle-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5L16 12L8 19V5Z" fill="#374151"/></svg>`;
+
+  const info = document.createElement('div');
+  info.style.flex = '1';
+  const ver = node.verified ? '<span class="badge bg-success ms-2">מאושר</span>' : '<span class="badge bg-warning text-dark ms-2">לא מאושר</span>';
+  const emailHtml = node.email ? escapeHtml(node.email) : '<span class="text-danger">🔴 ללא מייל משויך</span>';
+  info.innerHTML = `<div class="node-title">${escapeHtml(node.name)} <span class="node-count">${(node.children?node.children.length:0)}</span> ${ver}</div><div class="node-meta">${emailHtml}</div>`;
+
+  const controls = document.createElement('div');
+  controls.className = 'node-controls';
+  controls.innerHTML = `<button class="btn btn-sm btn-outline-success" data-add="${node.id}">הוסף</button> <button class="btn btn-sm btn-outline-primary" data-edit="${node.id}">ערוך</button> <button class="btn btn-sm btn-outline-danger" data-del="${node.id}">מחק</button> <button class="btn btn-sm btn-outline-secondary" data-resend="${node.id}">אימות</button>`;
+
+  card.appendChild(toggle);
+  card.appendChild(info);
+  card.appendChild(controls);
+  wrapper.appendChild(card);
+
+  const childrenContainer = document.createElement('div');
+  childrenContainer.className = 'children';
+  childrenContainer.id = 'children-' + node.id;
+  wrapper.appendChild(childrenContainer);
+
+  // expand/collapse
+  toggle.addEventListener('click', async ()=>{
+    const isCollapsed = wrapper.classList.toggle('collapsed');
+    toggle.setAttribute('aria-expanded', (!isCollapsed).toString());
+    // if expanding now and no children loaded yet, lazy-load direct children
+    if(!isCollapsed){
+      const container = childrenContainer;
+      if(container.children.length === 0){
+        // show spinner
+        const spinner = document.createElement('div'); spinner.textContent = 'טוען...'; spinner.className='small text-muted'; container.appendChild(spinner);
+        try{
+          const res = await apiFetch('/api/users?parent_id='+encodeURIComponent(node.id));
+          if(res.ok){
+            const kids = await res.json();
+            container.innerHTML = '';
+            kids.forEach(k=>{
+              const childEl = renderNode(k, depth+1);
+              container.appendChild(childEl);
+            });
+          } else {
+            container.innerHTML = '<div class="text-danger small">שגיאה בטעינה</div>';
+          }
+        }catch(e){ container.innerHTML = '<div class="text-danger small">שגיאת רשת</div>'; }
+      }
+    }
+  });
+
+  return wrapper;
+}
+
+async function load(){
+  const q = document.getElementById('q').value;
+  const list = document.getElementById('list'); list.innerHTML='';
+  // populate parent select from flat users list
+  const usersRes = await apiFetch('/api/users');
+  if(!usersRes.ok){ alert('שגיאת הרשאה'); return }
+  const usersFlat = await usersRes.json();
+  const parentSelect = document.getElementById('newParentSelect');
+  parentSelect.innerHTML = '<option value="">--- ללא הורה ---</option>';
+  usersFlat.forEach(r=>{ const opt = document.createElement('option'); opt.value = r.id; opt.textContent = r.name + ' <' + r.email + '>'; parentSelect.appendChild(opt); });
+
+  if(q){
+    // search mode: fetch flat users and build tree client-side
+    const res = await apiFetch('/api/users?q='+encodeURIComponent(q));
+    if(!res.ok){ alert('שגיאת הרשאה'); return }
+    const rows = await res.json();
+    const roots = buildTree(rows);
+    function appendChildren(parentEl, children, depth=0){
+      children.forEach(child=>{
+        const el = renderNode(child, depth);
+        parentEl.appendChild(el);
+        const container = el.querySelector('#children-'+child.id);
+        if(child.children && child.children.length) appendChildren(container, child.children, depth+1);
+      });
+    }
+    appendChildren(list, roots);
+  } else {
+    // full tree from server
+    const res = await apiFetch('/api/tree');
+    if(!res.ok){ alert('שגיאת הרשאה'); return }
+    const tree = await res.json();
+    // render recursive tree
+    function renderTree(nodes, parentEl, depth=0){
+      nodes.forEach(node=>{
+        const el = renderNode(node, depth);
+        parentEl.appendChild(el);
+        const childrenContainer = el.querySelector('#children-'+node.id);
+        if(node.children && node.children.length) renderTree(node.children, childrenContainer, depth+1);
+      });
+    }
+    renderTree(tree, list, 0);
+  }
+
+  // attach handlers for node actions
+  list.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', async e=>{
+    if(!confirm('להסיר משתמש?')) return;
+    const id = btn.getAttribute('data-del') || e.currentTarget.getAttribute('data-del');
+    try{
+      const res = await fetch('/api/users/'+id,{method:'DELETE',headers:{authorization:'Bearer '+token}});
+      if(!res.ok){ const j = await res.json(); alert(j.error||j.detail||'שגיאה במחיקה'); }
+    }catch(err){ alert('שגיאת רשת: ' + (err.message||err)); }
+    load();
+  }));
+  list.querySelectorAll('[data-resend]').forEach(btn=>btn.addEventListener('click', async e=>{
+    if(!confirm('לשלוח אימות מחדש למשתמש זה?')) return;
+    const id = btn.getAttribute('data-resend');
+    const prev = btn.innerHTML;
+    try {
+      btn.disabled = true;
+      btn.innerHTML = 'שולח...';
+      const res = await fetch('/api/users/'+id+'/resend',{method:'POST',headers:{authorization:'Bearer '+token}});
+      let j = {};
+      try { j = await res.json(); } catch(_){ }
+      if (res.ok) alert('נשלח אימות'); else alert(j.error || j.detail || 'שגיאה בשליחת אימות');
+    } catch (err){ alert('שגיאת רשת: ' + (err.message || err)); }
+    finally{ btn.disabled = false; btn.innerHTML = prev; load(); }
+  }));
+  list.querySelectorAll('[data-edit]').forEach(btn=>btn.addEventListener('click', e=>editUser(e.target.getAttribute('data-edit'))));
+  list.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click', e=>addChildPrompt(e.target.getAttribute('data-add'))));
+}
+
+async function editUser(id){
+  // fetch flat users for parent choices
+  const resAll = await fetch('/api/users',{headers:{authorization:'Bearer '+token}});
+  if(!resAll.ok){ alert('שגיאת הרשאה'); return }
+  const rows = await resAll.json();
+  const existing = rows.find(r=>String(r.id)===String(id)) || {};
+  const name = prompt('שם חדש', existing.name) || existing.name;
+  const email = prompt('אימייל חדש', existing.email) || existing.email;
+  // list possible parents
+  const opts = rows.map(r=>`${r.id}: ${r.name}`).join('\n');
+  const parentRaw = prompt('בחר הורה לפי id (השאר ריק לשמור ללא שינוי):\n' + opts, existing.parent_id || '');
+  let parent_id = undefined;
+  if(parentRaw === null) return; // cancelled
+  if(parentRaw.trim() === '') parent_id = null; else parent_id = parseInt(parentRaw);
+  const is_admin = confirm('להעניק הרשאת מנהל?');
+  await fetch('/api/users/'+id,{method:'PUT',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name,email,is_admin,parent_id})});
+  load();
+}
+
+async function addChildPrompt(parentId){
+  const name = prompt('שם חדש'); if(!name) return;
+  const email = prompt('אימייל'); if(!email) return;
+  const is_admin = confirm('להעניק הרשאת מנהל?');
+  const res = await fetch('/api/users',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name,email,is_admin,parent_id: parseInt(parentId)})});
+  const j = await res.json();
+  if(res.ok) alert('נוצר משתמש — סיסמה זמנית: ' + j.tempPassword); else alert(j.error||j.detail||'שגיאה');
+  load();
+}
+
+document.getElementById('addBtn').addEventListener('click', async ()=>{
+  const name = document.getElementById('newName').value.trim();
+  const email = document.getElementById('newEmail').value.trim();
+  const is_admin = document.getElementById('newIsAdmin').checked;
+  const parent_id = document.getElementById('newParentSelect').value || null;
+  const res = await fetch('/api/users',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name,email,is_admin,parent_id})});
+  const j = await res.json();
+  const out = document.getElementById('addResult');
+  if(res.ok){ out.textContent = 'נוצר משתמש — סיסמה זמנית: ' + j.tempPassword; out.className='text-success'; document.getElementById('newName').value=''; document.getElementById('newEmail').value=''; document.getElementById('newParentSelect').value=''; document.getElementById('newIsAdmin').checked=false; load(); }
+  else { out.textContent = (j.error||j.detail||'שגיאה'); out.className='text-danger'; }
+});
+
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+</script>
+</body>
+</html>

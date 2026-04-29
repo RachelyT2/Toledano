@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>שליחת הזמנה - משפחה</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+  <style>
+    /* family card styles */
+    .tree-node { display:block; margin-bottom:8px; }
+    .node-card { display:flex; align-items:center; gap:12px; padding:10px; background:#fff; border:1px solid #e6e9ee; border-radius:8px; box-shadow:0 1px 2px rgba(16,24,40,0.04); }
+    .node-title { font-weight:600; margin:0; }
+    .node-meta { color:#6b7280; font-size:0.85rem; }
+    .children { margin-right:20px; margin-top:8px; }
+    .toggle-btn { width:28px; height:28px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; background:transparent; }
+    .toggle-icon { transition: transform .18s ease; }
+    .collapsed > .node-card .toggle-icon { transform: rotate(-90deg); }
+    .collapsed > .children { display:none; }
+    /* soft pastel backgrounds by tree depth */
+    .level-0 .node-card { background:#eef6ff; border-color:#d6e9ff; }
+    .level-1 .node-card { background:#f0fdf4; border-color:#d1f7dc; }
+    .level-2 .node-card { background:#fff7ed; border-color:#ffe7cc; }
+    .level-3 .node-card { background:#f5f3ff; border-color:#e7e0ff; }
+    .level-4 .node-card { background:#fffaf0; border-color:#f7ecd7; }
+    /* text contrast tweaks */
+    .level-0 .node-title, .level-1 .node-title, .level-2 .node-title, .level-3 .node-title { color:#1f2937; }
+  .ql-editor {
+    direction: rtl;
+    text-align: right;
+  }
+
+  .ql-editor.ql-blank::before {
+    right: 15px;
+    left: auto;
+    text-align: right;
+  }
+  .ql-toolbar .ql-size {
+  min-width: 80px;
+}
+
+.ql-toolbar .ql-picker-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ql-toolbar .ql-picker-label::before {
+  margin-right: 4px;
+}
+.ql-toolbar {
+  direction: ltr;
+}
+  </style>
+</head>
+<body class="bg-light">
+<main class="container py-4">
+  <h1 class="mb-3">שליחת הודעה למשפחה</h1>
+
+  <div id="auth" class="mb-4">
+    <div id="loginForm">
+      <h4>התחברות</h4>
+      <div class="mb-2">
+        <label class="form-label">אימייל</label>
+        <input id="email" class="form-control" autocomplete="username">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">סיסמה</label>
+        <div class="input-group">
+          <input id="password" type="password" class="form-control" autocomplete="current-password">
+          <button class="btn btn-outline-secondary" type="button" id="togglePassword">הצג</button>
+        </div>
+      </div>
+      <button id="loginBtn" class="btn btn-primary">התחבר</button>
+      <small class="d-block mt-2">אין חשבון? לבקש מהמנהל שיצור לך אחד.</small>
+    </div>
+  </div>
+
+  <div id="app" class="d-none">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <strong id="userName"></strong>
+        <div id="userVerified" class="small text-muted"></div>
+      </div>
+      <div>
+          <button id="resendBtn" class="btn btn-sm btn-outline-warning d-none">שלח אימות מחדש</button>
+          <button id="editProfileBtn" class="btn btn-sm btn-outline-secondary">ערוך פרופיל</button>
+          <button id="addEmailBtn" class="btn btn-sm btn-outline-info">הוספת כתובת</button>
+          <button id="requestAddUserBtn" class="btn btn-sm btn-outline-primary">בקשת הוספת משתמש</button>
+          <button id="deleteAccountBtn" class="btn btn-sm btn-outline-danger">מחק חשבון</button>
+          <button id="logoutBtn" class="btn btn-sm btn-outline-secondary">התנתק</button>
+          <a href="/admin.html" id="adminLink" class="btn btn-sm btn-outline-primary d-none">מנהל</a>
+        </div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">חיפוש ברשימה</label>
+      <input id="search" class="form-control" placeholder="חפש שם או אימייל">
+    </div>
+
+    <form id="sendForm">
+      <fieldset class="mb-3">
+        <legend>בחר נמענים</legend>
+        <div id="recipients" class="list-group" aria-live="polite"></div>
+      </fieldset>
+
+      <div class="mb-3">
+        <label class="form-label">נושא</label>
+        <input id="subject" class="form-control">
+      </div>
+      <!-- <div class="mb-3">
+        <label class="form-label">הודעה</label>
+        <textarea id="message" rows="6" class="form-control"></textarea>
+      </div> -->
+      <div class="mb-3">
+        <label class="form-label">הודעה</label>
+        <div id="editor" style="height:200px; background:white;"></div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">קבצים מצורפים</label>
+        <input id="files" type="file" class="form-control" multiple>
+      </div>
+      <button class="btn btn-success">שלח</button>
+    </form>
+    <div id="status" class="mt-3" role="status" aria-live="polite"></div>
+  </div>
+</main>
+
+<!-- Request modal -->
+<div class="modal fade" id="requestModal" tabindex="-1" aria-labelledby="requestModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="requestModalLabel">שליחת בקשה למנהל</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label">שם (אופציונלי)</label>
+          <input id="requestName" class="form-control" placeholder="שם המשתמש">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">כתובת אימייל</label>
+          <input id="requestEmails" class="form-control" placeholder="first@example.com">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">שם אב (אופציונלי)</label>
+          <select id="requestFather" class="form-select">
+            <option value="">--- בחר אב ---</option>
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">שם סב (אופציונלי)</label>
+          <select id="requestGrandfather" class="form-select">
+            <option value="">--- בחר סב ---</option>
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">פרטים / סיבה</label>
+          <textarea id="requestDetails" class="form-control" rows="4"></textarea>
+        </div>
+        <div id="requestResult" class="small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">בטל</button>
+        <button type="button" id="requestSubmit" class="btn btn-primary">שלח למנהל</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const api = (path, opts)=>fetch('/api/'+path, opts);
+let token = null;
+let currentUser = null; // decoded JWT payload
+let usersList = [];
+const quill = new Quill('#editor', {
+  theme: 'snow',
+  placeholder: 'כתבי כאן הודעה...',
+  modules: {
+    toolbar: [
+      [{ size: ['small', false, 'large', 'huge'] }],
+      ['bold', 'italic', 'underline'],
+      [{ 'color': [] }],
+      [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+      [{ align: [] }],
+      ['link']
+    ]
+  }
+});
+quill.format('align', 'right');
+function setAuth(t, user){
+  token = t;
+  currentUser = user;
+  if(t){
+    document.getElementById('loginForm').classList.add('d-none');
+    document.getElementById('app').classList.remove('d-none');
+    document.getElementById('userName').textContent = user.name + ' ('+user.email+')';
+    if(user.is_admin) document.getElementById('adminLink').classList.remove('d-none');
+    const verifiedEl = document.getElementById('userVerified');
+    if(user.verified) { verifiedEl.textContent = 'מייל מאושר'; verifiedEl.className='small text-success'; document.getElementById('resendBtn').classList.add('d-none'); }
+    else { verifiedEl.textContent = 'מייל לא מאושר'; verifiedEl.className='small text-danger'; document.getElementById('resendBtn').classList.remove('d-none'); }
+    loadUsers();
+  } else {
+    document.getElementById('loginForm').classList.remove('d-none');
+    document.getElementById('app').classList.add('d-none');
+  }
+}
+
+document.getElementById('resendBtn').addEventListener('click', async ()=>{
+  const res = await fetch('/api/resend-verification',{method:'POST',headers:{authorization:'Bearer '+token}});
+  if(res.ok) alert('נשלח אימות מחדש לאימייל שלך'); else { const j=await res.json(); alert(j.error||'שגיאה'); }
+});
+
+document.getElementById('loginBtn').addEventListener('click', async ()=>{
+  const email=document.getElementById('email').value;
+  const password=document.getElementById('password').value;
+  const res = await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,password})});
+  const j=await res.json();
+  if(res.ok){
+    const payload = JSON.parse(atob(j.token.split('.')[1]));
+    setAuth(j.token, payload);
+  } else alert(j.error||j.detail||'שגיאה');
+});
+
+// toggle password visibility
+document.getElementById('togglePassword').addEventListener('click', ()=>{
+  const inp = document.getElementById('password');
+  const btn = document.getElementById('togglePassword');
+  if(inp.type === 'password'){ inp.type = 'text'; btn.textContent = 'הסתר'; }
+  else { inp.type = 'password'; btn.textContent = 'הצג'; }
+});
+
+document.getElementById('logoutBtn').addEventListener('click', ()=>setAuth(null));
+
+async function loadUsers(q){
+  const url = '/api/users'+(q?('?q='+encodeURIComponent(q)): '');
+  const res = await fetch(url,{headers:{authorization:'Bearer '+token}});
+  const rows = await res.json();
+  usersList = rows;
+  // update current user full data if available
+  if(currentUser){
+    const me = rows.find(r=>String(r.id) === String(currentUser.id));
+    if(me){
+      // update displayed name/email
+      document.getElementById('userName').textContent = me.name + ' (' + (me.email || '') + ')';
+      currentUser = Object.assign(currentUser, { name: me.name, email: me.email });
+    }
+  }
+  const container = document.getElementById('recipients');
+  container.innerHTML='';
+
+  // build map and tree by parent_id
+  const map = {};
+  rows.forEach(r=>{ r.children = []; map[r.id] = r; });
+  const roots = [];
+  rows.forEach(r=>{
+    if(r.parent_id){
+      const p = map[r.parent_id];
+      if(p) p.children.push(r); else roots.push(r);
+    } else roots.push(r);
+  });
+
+  function createNode(node, depth = 0){
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tree-node level-' + Math.min(depth,4);
+
+    const card = document.createElement('div');
+    card.className = 'node-card';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'toggle-btn';
+    toggle.setAttribute('aria-expanded','true');
+    toggle.innerHTML = `<svg class="toggle-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5L16 12L8 19V5Z" fill="#374151"/></svg>`;
+
+    const info = document.createElement('div');
+    info.style.flex = '1';
+    const rel = (node.parent? 'בן של ' + escapeHtml(node.parent) : '') + (node.grandparent? ' | נכד של ' + escapeHtml(node.grandparent) : '');
+    let emailsHtml = '';
+    try{ if(node.emails && node.emails.length>1){ emailsHtml = '<div class="small text-muted">כתובות נוספות: ' + node.emails.map(e=>escapeHtml(e)).join(', ') + '</div>'; } }catch(e){}
+    info.innerHTML = `<div class="node-title">${escapeHtml(node.name)} <div class="node-meta d-inline">&lt;${escapeHtml(node.email)}&gt;</div></div><div class="node-meta">${rel}</div>` + emailsHtml;
+
+    const controls = document.createElement('div');
+    const checkbox = document.createElement('input'); checkbox.type='checkbox'; checkbox.value = node.id; checkbox.className='form-check-input me-2';
+    controls.appendChild(checkbox);
+
+    card.appendChild(toggle);
+    card.appendChild(info);
+    card.appendChild(controls);
+    wrapper.appendChild(card);
+
+    const childrenContainer = document.createElement('div');
+    childrenContainer.className = 'children';
+    wrapper.appendChild(childrenContainer);
+
+    // lazy expand/collapse
+    toggle.addEventListener('click', ()=>{
+      const isCollapsed = wrapper.classList.toggle('collapsed');
+      toggle.setAttribute('aria-expanded', (!isCollapsed).toString());
+        if(!isCollapsed){
+          // if children already present do nothing
+          if(childrenContainer.children.length === 0 && node.children && node.children.length){
+            node.children.forEach(c=> childrenContainer.appendChild(createNode(c, depth+1)));
+          }
+        }
+    });
+
+    // when parent checkbox toggled, toggle children
+    checkbox.addEventListener('change', ()=>{
+      const checked = checkbox.checked;
+      childrenContainer.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.checked = checked);
+    });
+
+    // initially render children collapsed but present if any
+    if(node.children && node.children.length){
+      node.children.forEach(c=> childrenContainer.appendChild(createNode(c, depth+1)));
+      wrapper.classList.add('collapsed');
+      toggle.setAttribute('aria-expanded','false');
+    }
+
+    return wrapper;
+  }
+
+  roots.forEach(r=> container.appendChild(createNode(r)) );
+  // populate parent selectors (father/grandfather) in modal if present
+  const fatherSel = document.getElementById('requestFather');
+  const grandSel = document.getElementById('requestGrandfather');
+  if(fatherSel && grandSel){
+    fatherSel.innerHTML = '<option value="">--- בחר אב ---</option>';
+    grandSel.innerHTML = '<option value="">--- בחר סב ---</option>';
+    rows.forEach(u=>{
+      const o1 = document.createElement('option'); o1.value = u.id; o1.textContent = u.name + ' <' + (u.email||'') + '>';
+      const o2 = document.createElement('option'); o2.value = u.id; o2.textContent = u.name + ' <' + (u.email||'') + '>';
+      fatherSel.appendChild(o1);
+      grandSel.appendChild(o2);
+    });
+  }
+}
+
+document.getElementById('search').addEventListener('input', (e)=>loadUsers(e.target.value));
+
+// request modal handlers (simplified)
+const requestModalEl = document.getElementById('requestModal');
+const requestModal = requestModalEl ? new bootstrap.Modal(requestModalEl) : null;
+let pendingRequestAction = 'self_edit';
+
+// edit profile / delete account (self) buttons
+document.getElementById('editProfileBtn').addEventListener('click', ()=>{
+  if(!requestModal) return alert('Modal not initialized');
+  if(!currentUser) return alert('אנא היכנס/י לפני עריכה');
+  pendingRequestAction = 'self_edit';
+  // prefill with current user
+  const me = usersList.find(r=>String(r.id) === String(currentUser.id));
+  document.getElementById('requestName').value = (me && me.name) ? me.name : (currentUser.name || '');
+  const existingEmails = (me && Array.isArray(me.emails)) ? me.emails.join(', ') : (currentUser.email?currentUser.email:'');
+  document.getElementById('requestEmails').value = existingEmails;
+  document.getElementById('requestDetails').value = '';
+  document.getElementById('requestResult').textContent = '';
+  document.getElementById('requestName').removeAttribute('readonly');
+  document.getElementById('requestEmails').removeAttribute('readonly');
+  requestModal.show();
+});
+
+document.getElementById('deleteAccountBtn').addEventListener('click', ()=>{
+  if(!requestModal) return alert('Modal not initialized');
+  if(!currentUser) return alert('אנא היכנס/י לפני שמחיקים חשבון');
+  pendingRequestAction = 'self_remove';
+  // show only name/email (readonly) and details for reason
+  const me = usersList.find(r=>String(r.id) === String(currentUser.id));
+  document.getElementById('requestName').value = (me && me.name) ? me.name : (currentUser.name || '');
+  const existingEmails = (me && Array.isArray(me.emails)) ? me.emails.join(', ') : (currentUser.email?currentUser.email:'');
+  document.getElementById('requestEmails').value = existingEmails;
+  document.getElementById('requestDetails').value = '';
+  document.getElementById('requestResult').textContent = '';
+  document.getElementById('requestName').setAttribute('readonly','');
+  document.getElementById('requestEmails').setAttribute('readonly','');
+  requestModal.show();
+});
+
+// add email button: opens modal to add a single new email to current user
+document.getElementById('addEmailBtn').addEventListener('click', ()=>{
+  if(!requestModal) return alert('Modal not initialized');
+  if(!currentUser) return alert('אנא היכנס/י לפני ביצוע פעולה');
+  pendingRequestAction = 'add_email';
+  const me = usersList.find(r=>String(r.id) === String(currentUser.id));
+  document.getElementById('requestName').value = (me && me.name) ? me.name : (currentUser.name || '');
+  document.getElementById('requestEmails').value = '';
+  document.getElementById('requestDetails').value = '';
+  document.getElementById('requestResult').textContent = '';
+  // name readonly while adding email
+  document.getElementById('requestName').setAttribute('readonly','');
+  document.getElementById('requestEmails').removeAttribute('readonly');
+  requestModal.show();
+});
+// request add user: opens modal to send an add-user request to admin
+document.getElementById('requestAddUserBtn').addEventListener('click', ()=>{
+  if(!requestModal) return alert('Modal not initialized');
+  pendingRequestAction = 'request_add_user';
+  document.getElementById('requestName').value = '';
+  document.getElementById('requestEmails').value = '';
+  document.getElementById('requestDetails').value = '';
+  document.getElementById('requestResult').textContent = '';
+  document.getElementById('requestName').removeAttribute('readonly');
+  document.getElementById('requestEmails').removeAttribute('readonly');
+  requestModal.show();
+});
+
+document.getElementById('requestSubmit').addEventListener('click', async ()=>{
+  const action = pendingRequestAction;
+  const name = document.getElementById('requestName').value.trim();
+  const emails = document.getElementById('requestEmails').value.trim();
+  const details = document.getElementById('requestDetails').value.trim();
+  const resultEl = document.getElementById('requestResult');
+  resultEl.textContent = 'שולח...';
+  try{
+    if(action === 'self_edit'){
+      // send PUT /api/me
+      const body = { name, emails: emails ? emails.split(',').map(s=>s.trim()).filter(Boolean) : [] };
+      const res = await fetch('/api/me',{method:'PUT',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(body)});
+      if(res.ok){ resultEl.className='text-success'; resultEl.textContent='הפרופיל עודכן'; setTimeout(()=> requestModal.hide(),900); loadUsers(); }
+      else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
+      return;
+    }
+    if(action === 'self_remove'){
+      const res = await fetch('/api/me',{method:'DELETE',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify({ reason: details })});
+      if(res.ok){ resultEl.className='text-success'; resultEl.textContent='החשבון הוסר'; setTimeout(()=>{ requestModal.hide(); setAuth(null); },900); }
+      else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
+      return;
+    }
+    if(action === 'add_email'){
+      const newEmail = emails.trim();
+      if(!newEmail) { resultEl.className='text-danger'; resultEl.textContent='נא להזין כתובת אימייל'; return; }
+      // get existing emails for user
+      const me = usersList.find(r=>String(r.id) === String(currentUser.id));
+      const existing = (me && Array.isArray(me.emails)) ? me.emails.slice() : (currentUser.email ? [currentUser.email] : []);
+      if(existing.includes(newEmail)) { resultEl.className='text-danger'; resultEl.textContent='כתובת כבר קיימת'; return; }
+      existing.push(newEmail);
+      const body = { emails: existing };
+      const res = await fetch('/api/me',{method:'PUT',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(body)});
+      if(res.ok){ resultEl.className = 'text-success'; resultEl.textContent = 'הכתובת נוספה'; setTimeout(()=>{ requestModal.hide(); loadUsers(); },900); }
+      else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
+      return;
+    }
+
+    if(action === 'request_add_user'){
+      // send request to admin to add a new user (include optional father/grandfather)
+      const father = document.getElementById('requestFather') ? document.getElementById('requestFather').value : '';
+      const grandfather = document.getElementById('requestGrandfather') ? document.getElementById('requestGrandfather').value : '';
+      const payload = { action: 'add_user', details: `Name: ${name}\nEmails: ${emails}\n\n${details}`, extra: { father_id: father || null, grandfather_id: grandfather || null } };
+      const res = await fetch('/api/request-admin',{method:'POST',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(payload)});
+      if(res.ok){ resultEl.className = 'text-success'; resultEl.textContent = 'הבקשה נשלחה למנהל'; setTimeout(()=> requestModal.hide(), 900); }
+      else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
+      return;
+    }
+
+    // legacy/admin requests are not available in simplified modal
+    resultEl.className='text-danger'; resultEl.textContent = 'פעולה לא נתמכת';
+  }catch(e){ resultEl.className='text-danger'; resultEl.textContent = 'שגיאת רשת'; }
+});
+
+document.getElementById('sendForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const checked = Array.from(document.querySelectorAll('#recipients input:checked')).map(i=>i.value);
+  if(checked.length===0){alert('בחר נמענים');return}
+  const subject = document.getElementById('subject').value;
+  const message = quill.root.innerHTML;  
+  const formData = new FormData();
+
+  formData.append('recipients', JSON.stringify(checked));
+  formData.append('subject', subject);
+  formData.append('message', message);
+
+  // קבצים מצורפים
+  const fileInput = document.getElementById('files');
+  for (let i = 0; i < fileInput.files.length; i++) {
+    formData.append('files', fileInput.files[i]);
+  }
+
+  const res = await fetch('/api/send', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer ' + token
+    },
+    body: formData
+  });
+  // const res = await fetch('/api/send',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify({recipients:checked,subject,message})});
+  const j = await res.json();
+  const status = document.getElementById('status');
+  if(res.ok){ status.textContent='נשלח בהצלחה'; status.className='text-success'; } else { status.textContent=(j.error||j.detail||'שגיאה'); status.className='text-danger'; }
+});
+
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+</script>
+</body>
+</html>
