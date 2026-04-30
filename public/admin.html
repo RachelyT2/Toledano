@@ -325,7 +325,7 @@ async function addChildPrompt(parentId){
   const is_admin = confirm('להעניק הרשאת מנהל?');
   const res = await fetch('/api/users',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name,email,is_admin,parent_id: parseInt(parentId)})});
   const j = await res.json();
-  if(res.ok) alert('נוצר משתמש — סיסמה זמנית: ' + j.tempPassword); else alert(j.error||j.detail||'שגיאה');
+  if(res.ok) alert('נוצר משתמש — המשתמש יקבל מייל עם סיסמה זמנית'); else alert(j.error||j.detail||'שגיאה');
   load();
 }
 
@@ -337,7 +337,7 @@ document.getElementById('addBtn').addEventListener('click', async ()=>{
   const res = await fetch('/api/users',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name,email,is_admin,parent_id})});
   const j = await res.json();
   const out = document.getElementById('addResult');
-  if(res.ok){ out.textContent = 'נוצר משתמש — סיסמה זמנית: ' + j.tempPassword; out.className='text-success'; document.getElementById('newName').value=''; document.getElementById('newEmail').value=''; document.getElementById('newParentSelect').value=''; document.getElementById('newIsAdmin').checked=false; load(); }
+  if(res.ok){ out.textContent = 'נוצר משתמש — המשתמש יקבל מייל עם סיסמה זמנית'; out.className='text-success'; document.getElementById('newName').value=''; document.getElementById('newEmail').value=''; document.getElementById('newParentSelect').value=''; document.getElementById('newIsAdmin').checked=false; load(); }
   else { out.textContent = (j.error||j.detail||'שגיאה'); out.className='text-danger'; }
 });
 

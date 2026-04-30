@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const path = require('path');
 const { open } = require('sqlite');
+const ExcelJS = require('exceljs');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
 require('dotenv').config();
@@ -256,9 +257,10 @@ app.post('/api/users', authMiddleware, async (req, res) => {
     }
     const result = await db.run('INSERT INTO users (name,email,password_hash,is_admin,verified,verification_token,parent,grandparent,parent_id,parents,emails) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [name, emailsToStore[0], hash, is_admin ? 1 : 0, 0, token, parent || null, grandparent || null, parent_id, JSON.stringify(parentsToStore), JSON.stringify(emailsToStore)]);
     const base = req.protocol + '://' + req.get('host');
-    await sendVerificationEmail(email, name, token, base);
-    await notifyAdmin(`Admin ${req.user.email} added: ${name} <${email}>`);
-    res.json({ id: result.lastID, tempPassword });
+    // send welcome email with temporary password to the new user (do not return password to admin)
+    await sendNewUserWelcomeEmail(emailsToStore[0], name, tempPassword, token, base);
+    await notifyAdmin(`Admin ${req.user.email} added: ${name} <${emailsToStore[0]}>`);
+    res.json({ id: result.lastID });
   } catch (e) {
     res.status(400).json({ error: 'Could not create user', detail: e.message });
   }
@@ -598,6 +600,26 @@ async function sendVerificationEmail(email, name, token, baseUrl) {
   } catch (e) {
     console.error('sendVerificationEmail failed', e.message);
   }
+}
+
+async function sendNewUserWelcomeEmail(email, name, tempPassword, token, baseUrl){
+  try{
+    const link = `${baseUrl}/verify?token=${token}`;
+    const subject = 'ברוכים הבאים — חשבון נוצר עבורך';
+    const text = `שלום ${name || ''},\n\nנוצר עבורך חשבון במערכת המשפחה.\n\nסיסמה זמנית להתחברות: ${tempPassword}\nאנא היכנס/י ושנה סיסמה לאחר ההתחברות.\n\nלאישור המייל השתמש/י בקישור: ${link}\n\nאם לא ביקשת חשבון - התעלם/י מההודעה.`;
+    const html = `
+      <div style="font-family:Arial, Helvetica, sans-serif; color:#111;">
+        <h2>שלום ${escapeHtml(name || '')},</h2>
+        <p>נוצר עבורך חשבון במערכת המשפחה.</p>
+        <p><strong>סיסמה זמנית:</strong> <span style="background:#f3f4f6;padding:4px 8px;border-radius:6px;font-family:monospace;">${escapeHtml(tempPassword)}</span></p>
+        <p>אנא היכנס/י ושנה את הסיסמה לאחר ההתחברות.</p>
+        <p>לאישור כתובת המייל — לחץ/י כאן:</p>
+        <p><a href="${link}" style="display:inline-block;padding:8px 12px;background:#0d6efd;color:white;border-radius:6px;text-decoration:none;">אשר כתובת מייל</a></p>
+        <p style="color:#6b7280;font-size:0.9rem;">אם לא ביקשת חשבון זה, התעלם/י מההודעה או פנה/י למנהל.</p>
+      </div>
+    `;
+    await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: email, subject, text, html });
+  }catch(e){ console.error('sendNewUserWelcomeEmail failed', e && e.message ? e.message : e); }
 }
 
 function escapeHtml(str){
