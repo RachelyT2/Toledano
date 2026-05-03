@@ -4,9 +4,9 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
+const ExcelJS = require('exceljs');
 const path = require('path');
 const { open } = require('sqlite');
-const ExcelJS = require('exceljs');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
 require('dotenv').config();
@@ -49,6 +49,7 @@ async function initDb() {
   try { await db.run('ALTER TABLE users ADD COLUMN parent_id INTEGER'); } catch(e){}
   try { await db.run("ALTER TABLE users ADD COLUMN parents TEXT"); } catch(e){}
   try { await db.run("ALTER TABLE users ADD COLUMN emails TEXT"); } catch(e){}
+  try { await db.run("CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, action TEXT, details TEXT, extra TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, processed INTEGER DEFAULT 0, processed_by INTEGER, processed_at DATETIME, result TEXT)"); } catch(e){}
   return db;
 }
 
@@ -460,11 +461,22 @@ app.delete('/api/users/:id', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/send', authMiddleware, upload.array('files'), async (req, res) => {  const { recipients, subject, message } = req.body;
+app.post('/api/send', authMiddleware, upload.array('files'), async (req, res) => {  let { recipients, subject, message } = req.body;
+  // when using multipart/form-data (FormData) recipients may arrive as a JSON string
+  try{
+    if (typeof recipients === 'string'){
+      try{ recipients = JSON.parse(recipients); }
+      catch(_){ // fallback: allow comma-separated ids
+        recipients = recipients.split(',').map(s=>s.trim()).filter(Boolean);
+      }
+    }
+  }catch(e){ /* ignore */ }
   if (!recipients || !Array.isArray(recipients) || recipients.length === 0) return res.status(400).json({ error: 'recipients required' });
+  // normalize ids to simple values for the SQL placeholders
+  recipients = recipients.map(r=>{ if(typeof r === 'string' && r.match(/^\d+$/)) return parseInt(r); return r; });
   const files = req.files || [];
   const db = await initDb();
-  const rows = await db.all(`SELECT emails,name FROM users WHERE id IN (${recipients.map(()=>'?').join(',')})`, recipients);
+  const rows = await db.all(`SELECT id,emails,name,email FROM users WHERE id IN (${recipients.map(()=>'?').join(',')})`, recipients);
   if (!rows || rows.length === 0) return res.status(400).json({ error: 'no recipients found' });
 
   // ensure sender is verified
@@ -479,27 +491,34 @@ app.post('/api/send', authMiddleware, upload.array('files'), async (req, res) =>
       try{ const arr = r.emails ? JSON.parse(r.emails) : (r.email?[r.email]:[]); sendTo = sendTo.concat(arr); }catch(e){ if(r.email) sendTo.push(r.email); }
     });
     sendTo = Array.from(new Set(sendTo.map(s=>String(s).trim())));
+    // if no actual email addresses resolved, return a clear error
+    if(!sendTo || sendTo.length === 0){
+      console.error('No resolved recipient email addresses for recipients:', recipients);
+      return res.status(400).json({ error: 'no recipient emails resolved' });
+    }
     const serverFrom = process.env.SMTP_USER || 'no-reply@example.com';
     const replyTo = `${req.user.name} <${req.user.email}>`;
     const fromDisplay = `${req.user.name} דרך המשפחה <${serverFrom}>`;
     const senderLineText = `נשלח על ידי: ${req.user.name} <${req.user.email}>\n\n`;
     const senderLineHtml = `<p><strong>נשלח על ידי: ${escapeHtml(req.user.name)} &lt;${escapeHtml(req.user.email)}&gt;</strong></p>`;
+    // sanitize and wrap message for RTL display
+    const safeMessage = sanitizeHtml(message || '');
+    const htmlBody = `
+      <div dir="rtl" style="font-family:Arial, Helvetica, sans-serif; font-size:14px; line-height:1.6; text-align:right; direction:rtl;">
+        ${senderLineHtml}
+        <div>
+          ${safeMessage}
+        </div>
+      </div>
+    `;
     await safeSendMail({
       from: fromDisplay,
       to: sendTo.join(','),
       replyTo,
       subject: subject || '(no subject)',
       text: senderLineText + (message || ''),
-      // html: senderLineHtml + `<pre style="font-family:inherit;">${escapeHtml(message || '')}</pre>`,
-      html: senderLineHtml + `
-        <div style="font-family:Arial; font-size:14px; line-height:1.6;">
-        ${message || ''}
-      </div>
-      `,
-      attachments: files.map(f => ({
-        filename: f.originalname,
-        path: f.path
-      }))
+      html: htmlBody,
+      attachments: files.map(f => ({ filename: f.originalname, path: f.path }))
     });
     res.json({ ok: true });
   } catch (e) {
@@ -524,6 +543,96 @@ app.get('/api/tree', authMiddleware, async (req, res) => {
   res.json(roots);
 });
 
+// Export hierarchical Excel file (admin: all users, non-admin: user's subtree)
+app.get('/api/export-xlsx', authMiddleware, async (req, res) => {
+  try{
+    const db = await initDb();
+    const rows = await db.all('SELECT id,name,email,phone,is_admin,verified,parent,grandparent,parent_id,parents,emails FROM users');
+    rows.forEach(r=>{ try{ r.parents = r.parents ? JSON.parse(r.parents) : []; }catch(e){ r.parents = []; } try{ r.emails = r.emails ? JSON.parse(r.emails) : (r.email?[r.email]:[]); }catch(e){ r.emails = r.email?[r.email]:[]; } r.email = r.emails && r.emails.length ? r.emails[0] : r.email; });
+    const map = {};
+    rows.forEach(r=>{ r.children = []; map[r.id] = r; });
+    // build tree using parent_id if present, else first element of parents array
+    rows.forEach(r=>{
+      const p = r.parent_id || (r.parents && r.parents.length ? r.parents[0] : null);
+      if(p && map[p]) map[p].children.push(r);
+    });
+
+    // choose roots depending on admin
+    let roots = [];
+    if(req.user.is_admin){
+      rows.forEach(r=>{ const p = r.parent_id || (r.parents && r.parents.length ? r.parents[0] : null); if(!(p && map[p])) roots.push(r); });
+    } else {
+      const me = map[req.user.id];
+      if(!me) return res.status(404).json({ error: 'user not found' });
+      roots = [me];
+    }
+
+    // prepare workbook
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Family Hierarchy');
+    // Simplified Hebrew headers: Level, Name, Email, Phone, Parent Chain
+    sheet.columns = [
+      { header: 'רמה', key: 'level', width: 8 },
+      { header: 'שם', key: 'name', width: 40 },
+      { header: 'מייל', key: 'email', width: 36 },
+      { header: 'טלפון', key: 'phone', width: 18 },
+      { header: 'שרשרת הורים', key: 'parent_chain', width: 60 }
+    ];
+    // style header row (bold + colored background)
+    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0D6EFD' } };
+    // right-align Hebrew text for name and parent chain
+    sheet.getColumn('name').alignment = { horizontal: 'right' };
+    sheet.getColumn('parent_chain').alignment = { horizontal: 'right' };
+
+    // helper to map parent ids to names
+    const idToName = {};
+    Object.values(map).forEach(n=>{ idToName[n.id] = n.name; });
+
+    // DFS traversal
+    function addNode(node, level, parentChainIds){
+      const parentChainNames = (parentChainIds||[]).map(id=> idToName[id] || String(id)).join(' > ');
+      const indent = Array(Math.max(0, level-1)).fill('—').join(' ');
+      const row = sheet.addRow({ level, name: (indent ? indent + ' ' : '') + (node.name||''), email: (node.emails||[]).length ? (node.emails||[])[0] : (node.email||''), phone: node.phone||'', parent_chain: parentChainNames });
+      // apply coloring by hierarchy level (soft pastels)
+      const levelColors = {
+        1: 'FFE8F4FF', // light blue
+        2: 'FFECFDF5', // light green
+        3: 'FFFFF7ED', // light yellow
+        4: 'FFF5F3FF', // light purple
+        5: 'FFFFFBEB'  // light peach
+      };
+      const color = levelColors[level] || levelColors[5];
+      const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: color } };
+      row.eachCell((cell, colNumber) => {
+        cell.fill = fill;
+        // align name and parent_chain to right for Hebrew
+        const colKey = sheet.getColumn(colNumber).key;
+        if(colKey === 'name' || colKey === 'parent_chain') cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        else cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      });
+      if(node.children && node.children.length){
+        // sort children by name
+        node.children.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+        for(const c of node.children){ addNode(c, level+1, (parentChainIds||[]).concat(node.id)); }
+      }
+    }
+
+    // sort roots by name
+    roots.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    roots.forEach(r=> addNode(r, 1, r.parents && r.parents.length ? r.parents.slice(0) : []));
+
+    const filename = `family-hierarchy-${new Date().toISOString().slice(0,10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  }catch(e){
+    console.error('export-xlsx failed', e && e.message ? e.message : e);
+    res.status(500).json({ error: 'failed to generate excel', detail: e.message });
+  }
+});
+
 async function notifyAdmin(text) {
   try {
     if (!process.env.ADMIN_EMAIL) return;
@@ -544,9 +653,185 @@ app.post('/api/request-admin', authMiddleware, async (req, res) => {
   if(extra.father_id) text += `\nFather ID: ${extra.father_id}`;
   if(extra.grandfather_id) text += `\nGrandfather ID: ${extra.grandfather_id}`;
   try{
+    const db = await initDb();
+    // store request for admin review
+    const insert = await db.run('INSERT INTO requests (user_id, action, details, extra) VALUES (?,?,?,?)', [user.id, action || '', details || '', JSON.stringify(extra || {})]);
     await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: process.env.ADMIN_EMAIL, subject: subj, text, replyTo: `${user.name} <${user.email}>` });
-    res.json({ ok: true });
+    res.json({ ok: true, requestId: insert.lastID });
   }catch(e){ res.status(500).json({ error: 'failed to send', detail: e.message }); }
+});
+
+// List pending requests (admin)
+app.get('/api/requests', authMiddleware, async (req, res) => {
+  if(!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
+  const db = await initDb();
+  const rows = await db.all('SELECT r.id, r.user_id, u.name as requester_name, u.email as requester_email, r.action, r.details, r.extra, r.created_at FROM requests r LEFT JOIN users u ON u.id = r.user_id WHERE r.processed = 0 ORDER BY r.created_at DESC');
+  rows.forEach(r=>{ try{ r.extra = r.extra ? JSON.parse(r.extra) : {}; }catch(e){ r.extra = {}; } });
+  res.json(rows);
+});
+
+// Approve a request (admin) - will perform add/edit/delete based on action
+app.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
+  if(!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
+  const { id } = req.params;
+  const db = await initDb();
+  const row = await db.get('SELECT * FROM requests WHERE id = ?', [id]);
+  if(!row) return res.status(404).json({ error: 'request not found' });
+  if(row.processed) return res.status(400).json({ error: 'already processed' });
+  let extra = {};
+  try{ extra = row.extra ? JSON.parse(row.extra) : {}; }catch(e){ extra = {}; }
+  const actorId = req.user.id;
+  try{
+    if(row.action === 'add_user' || extra.add_user){
+      // create user using fields in extra (support either extra.add_user or extra flattened)
+      const data = extra.add_user || extra || {};
+      const name = data.name || extra.name || (row.details?String(row.details).split('\n')[0]: '');
+      const emailsArr = Array.isArray(data.emails) ? data.emails : (extra.emails || []);
+      const emailPrimary = emailsArr && emailsArr.length ? emailsArr[0] : (extra.email || null);
+      const phone = data.phone || extra.phone || null;
+      const is_admin = data.is_admin ? 1 : 0;
+      if(!emailPrimary) throw new Error('missing primary email for new user');
+      const crypto = require('crypto');
+      const tempPassword = crypto.randomBytes(6).toString('hex');
+      const hash = await bcrypt.hash(tempPassword, 10);
+      const token = crypto.randomBytes(24).toString('hex');
+      // determine parent_id from several possible fields (parent_id, father_id)
+      const requestedParentId = (data.parent_id !== undefined && data.parent_id !== null) ? data.parent_id : (data.father_id || extra.parent_id || extra.father_id || null);
+      let parent_id = null;
+      let parentName = null;
+      let grandparentName = null;
+      let parentsToStoreArr = [];
+      if(requestedParentId){
+        const pRow = await db.get('SELECT id,name,parent_id,parents FROM users WHERE id = ?', [requestedParentId]);
+        if(pRow){
+          parent_id = pRow.id;
+          parentName = pRow.name;
+          // compute grandparent name: try pRow.parent (name) else use parent_id of parent
+          if(pRow.parent_id){
+            const gp = await db.get('SELECT name FROM users WHERE id = ?', [pRow.parent_id]);
+            if(gp) grandparentName = gp.name;
+          } else if(pRow.parent){
+            grandparentName = pRow.parent;
+          }
+          // build parents array: take parent's parents if present, then append parent id
+          try{ parentsToStoreArr = pRow.parents ? (typeof pRow.parents === 'string' ? JSON.parse(pRow.parents) : pRow.parents) : []; }catch(e){ parentsToStoreArr = []; }
+          parentsToStoreArr = Array.isArray(parentsToStoreArr) ? parentsToStoreArr.slice() : [];
+          if(!parentsToStoreArr.map(String).includes(String(pRow.id))) parentsToStoreArr.push(pRow.id);
+        } else {
+          // requested parent not found; ignore
+          parent_id = null;
+        }
+      } else {
+        // no parent requested; use any provided parent name strings
+        parentName = data.parent || extra.parent || null;
+        grandparentName = data.grandparent || extra.grandparent || null;
+        parentsToStoreArr = data.parents || extra.parents || [];
+      }
+      const parentsToStore = JSON.stringify(parentsToStoreArr || []);
+      const result = await db.run('INSERT INTO users (name,email,password_hash,is_admin,verified,verification_token,parent,grandparent,parent_id,parents,emails,phone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [name, emailPrimary, hash, is_admin, 0, token, parentName || null, grandparentName || null, parent_id, parentsToStore, JSON.stringify(emailsArr||[emailPrimary]), phone]);
+      const base = req.protocol + '://' + req.get('host');
+      await sendNewUserWelcomeEmail(emailPrimary, name, tempPassword, token, base);
+      const resultMsg = 'approved: created user id '+result.lastID;
+      await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
+      try{
+        const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+        if(requester && requester.email){
+          await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך ליצור משתמש אושרה. נוצר משתמש עם מזהה ${result.lastID}.\n\nבברכה, מנהל המערכת.` });
+        }
+      }catch(_){ }
+      return res.json({ ok:true, createdId: result.lastID });
+    }
+    if(row.action === 'edit_user' || extra.edit_user){
+      const data = extra.edit_user || extra || {};
+      const targetId = data.id || extra.id;
+      if(!targetId) throw new Error('missing target id for edit');
+      const existing = await db.get('SELECT * FROM users WHERE id = ?', [targetId]);
+      if(!existing) throw new Error('target user not found');
+      const updates = {};
+      if(data.name) updates.name = data.name;
+      if(data.emails) updates.emails = JSON.stringify(data.emails);
+      if(data.phone !== undefined) updates.phone = data.phone;
+      if(data.parent_id !== undefined) updates.parent_id = data.parent_id;
+      if(data.is_admin !== undefined) updates.is_admin = data.is_admin ? 1 : 0;
+      // build SET clause
+      const sets = Object.keys(updates).map(k=> `${k} = ?`).join(', ');
+      const vals = Object.keys(updates).map(k=> updates[k]);
+      if(sets.length) await db.run(`UPDATE users SET ${sets} WHERE id = ?`, [...vals, targetId]);
+      const resultMsg = 'approved: edited user '+targetId;
+      await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
+      try{ const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]); if(requester && requester.email){ await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך לערוך משתמש (${targetId}) אושרה והעדכונים בוצעו.\n\nבברכה, מנהל המערכת.` }); } }catch(_){ }
+      return res.json({ ok:true, editedId: targetId });
+    }
+    if(row.action === 'delete_user' || extra.delete_user){
+      const data = extra.delete_user || extra || {};
+      const targetId = data.id || extra.id;
+      if(!targetId) throw new Error('missing target id for delete');
+      const user = await db.get('SELECT * FROM users WHERE id = ?', [targetId]);
+      if(!user) throw new Error('user not found');
+      // determine children
+      const all = await db.all('SELECT id,parent_id,parents FROM users');
+      let hasChildren = false;
+      for(const r of all){ if(String(r.parent_id) === String(targetId)) { hasChildren = true; break; } if(r.parents){ try{ const arr = typeof r.parents === 'string' ? JSON.parse(r.parents) : r.parents; if(Array.isArray(arr) && arr.map(x=>String(x)).includes(String(targetId))){ hasChildren = true; break; } }catch(e){} } }
+      if(hasChildren){
+        const placeholder = `deleted+${targetId}+${Date.now()}@example.invalid`;
+        await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder, JSON.stringify([]), targetId]);
+        const resultMsg = 'approved: marked no-email (has children)';
+        await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
+        try{ const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]); if(requester && requester.email){ await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך להסיר משתמש אושרה. המשתמש שסומן מכיל ילדים ולכן הוסר כתובת המייל והועלה למצב 'ללא מייל'.\n\nבברכה, מנהל המערכת.` }); } }catch(_){ }
+        return res.json({ ok:true, replaced:true });
+      }
+      // orphan children and delete
+      await db.run('UPDATE users SET parent_id = NULL WHERE parent_id = ?', [targetId]);
+      const children = await db.all('SELECT id, parents FROM users WHERE parents IS NOT NULL');
+      for(const c of children){ try{ const arr = c.parents ? JSON.parse(c.parents) : []; const newArr = arr.filter(x=>String(x) !== String(targetId)); if(newArr.length !== arr.length) await db.run('UPDATE users SET parents = ? WHERE id = ?', [JSON.stringify(newArr), c.id]); }catch(e){} }
+      try{ await db.run('DELETE FROM users WHERE id = ?', [targetId]); }
+      catch(delErr){
+        if(String(delErr && delErr.message || '').includes('UNIQUE constraint')){
+          const placeholder = `deleted+${targetId}+${Date.now()}@example.invalid`;
+          await db.run('UPDATE users SET email = ?, emails = ? WHERE id = ?', [placeholder, JSON.stringify([]), targetId]);
+          await db.run('DELETE FROM users WHERE id = ?', [targetId]);
+        } else throw delErr;
+      }
+      const resultMsg = 'approved: deleted user '+targetId;
+      await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
+      try{ const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]); if(requester && requester.email){ await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך למחוק את המשתמש (id: ${targetId}) אושרה והמשתמש הוסר.\n\nבברכה, מנהל המערכת.` }); } }catch(_){ }
+      return res.json({ ok:true, deletedId: targetId });
+    }
+
+    // unknown action: mark processed but no-op
+    const resultMsg = 'approved: no-op (unknown action)';
+    await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
+    try{ const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]); if(requester && requester.email){ await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך אושרה (לאבצע פעולה ספציפית).\n\nבברכה, מנהל המערכת.` }); } }catch(_){ }
+    return res.json({ ok:true });
+  }catch(err){
+    console.error('approve request failed', err && err.message ? err.message : err);
+    await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, 'failed: '+(err && err.message?err.message:String(err)), id]);
+    return res.status(500).json({ error: err && err.message ? err.message : String(err) });
+  }
+});
+
+// Deny a request (admin)
+app.post('/api/requests/:id/deny', authMiddleware, async (req, res) => {
+  if(!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
+  const { id } = req.params;
+  const reason = req.body && req.body.reason ? String(req.body.reason) : '';
+  const db = await initDb();
+  const row = await db.get('SELECT * FROM requests WHERE id = ?', [id]);
+  if(!row) return res.status(404).json({ error: 'request not found' });
+  if(row.processed) return res.status(400).json({ error: 'already processed' });
+  const resultMsg = 'denied' + (reason ? (': ' + reason) : '');
+  await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [req.user.id, resultMsg, id]);
+  try{
+    const ruser = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+    if(ruser && ruser.email){
+      const subject = 'בקשת מנהל נדחתה';
+      let text = `שלום ${ruser.name || ''},\n\nבקשתך נדחתה על ידי המנהל.`;
+      if(reason) text += `\n\nסיבת הדחיה:\n${reason}`;
+      text += '\n\nאם ברצונך לקבל הבהרות נוספות, פנה למנהל.';
+      await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: ruser.email, subject, text });
+    }
+  }catch(_){ }
+  res.json({ ok:true });
 });
 
 // Allow authenticated user to update their own profile

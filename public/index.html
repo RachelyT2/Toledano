@@ -85,10 +85,11 @@
       <div>
           <button id="resendBtn" class="btn btn-sm btn-outline-warning d-none">שלח אימות מחדש</button>
           <button id="editProfileBtn" class="btn btn-sm btn-outline-secondary">ערוך פרופיל</button>
-          <button id="addEmailBtn" class="btn btn-sm btn-outline-info">הוספת כתובת</button>
+          
           <button id="requestAddUserBtn" class="btn btn-sm btn-outline-primary">בקשת הוספת משתמש</button>
           <button id="deleteAccountBtn" class="btn btn-sm btn-outline-danger">מחק חשבון</button>
           <button id="logoutBtn" class="btn btn-sm btn-outline-secondary">התנתק</button>
+          <button id="downloadExcelBtn" class="btn btn-sm btn-outline-secondary">הורד Excel</button>
           <a href="/admin.html" id="adminLink" class="btn btn-sm btn-outline-primary d-none">מנהל</a>
         </div>
     </div>
@@ -168,10 +169,44 @@
     </div>
   </div>
 </div>
+      <!-- Preview modal -->
+      <div class="modal fade" id="previewModal" tabindex="-1" aria-labelledby="previewModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="previewModalLabel">תצוגה מקדימה של ההודעה</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-2"><strong id="previewSubject"></strong></div>
+              <div class="mb-2 small text-muted" id="previewRecipients"></div>
+              <div id="previewBody" style="border:1px solid #eee; padding:12px; border-radius:6px; background:#fff;" dir="rtl"></div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">ביטול</button>
+              <button type="button" id="previewSendBtn" class="btn btn-primary">אשר ושלח</button>
+            </div>
+          </div>
+        </div>
+      </div>
 <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const api = (path, opts)=>fetch('/api/'+path, opts);
+
+// User-facing non-blocking notice (replaces alert())
+function showNotice(text, type='info'){
+  let container = document.getElementById('noticeContainer');
+  if(!container){ container = document.createElement('div'); container.id = 'noticeContainer'; container.style.position='fixed'; container.style.zIndex = 1051; container.style.top='16px'; container.style.left='16px'; container.style.right='16px'; container.style.pointerEvents='none'; document.body.appendChild(container); }
+  const el = document.createElement('div');
+  el.className = 'alert alert-' + (type==='error'?'danger':(type==='success'?'success':(type==='warning'?'warning':'info')));
+  el.style.pointerEvents='auto';
+  el.style.marginBottom='8px';
+  el.textContent = text;
+  container.appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity 0.4s'; el.style.opacity='0'; setTimeout(()=>el.remove(),450); }, 5000);
+  return el;
+}
 let token = null;
 let currentUser = null; // decoded JWT payload
 let usersList = [];
@@ -210,7 +245,7 @@ function setAuth(t, user){
 
 document.getElementById('resendBtn').addEventListener('click', async ()=>{
   const res = await fetch('/api/resend-verification',{method:'POST',headers:{authorization:'Bearer '+token}});
-  if(res.ok) alert('נשלח אימות מחדש לאימייל שלך'); else { const j=await res.json(); alert(j.error||'שגיאה'); }
+  if(res.ok) showNotice('נשלח אימות מחדש לאימייל שלך', 'success'); else { const j=await res.json(); showNotice(j.error||'שגיאה בשליחת אימות', 'error'); }
 });
 
 document.getElementById('loginBtn').addEventListener('click', async ()=>{
@@ -221,7 +256,7 @@ document.getElementById('loginBtn').addEventListener('click', async ()=>{
   if(res.ok){
     const payload = JSON.parse(atob(j.token.split('.')[1]));
     setAuth(j.token, payload);
-  } else alert(j.error||j.detail||'שגיאה');
+  } else showNotice(j.error||j.detail||'שגיאה', 'error');
 });
 
 // toggle password visibility
@@ -233,6 +268,28 @@ document.getElementById('togglePassword').addEventListener('click', ()=>{
 });
 
 document.getElementById('logoutBtn').addEventListener('click', ()=>setAuth(null));
+
+// Download Excel handler for users
+document.getElementById('downloadExcelBtn').addEventListener('click', async ()=>{
+  if(!token) return showNotice('אנא היכנס/י לפני הורדה', 'warning');
+  try{
+    const res = await fetch('/api/export-xlsx',{ headers: { authorization: 'Bearer ' + token } });
+    if(!res.ok){ const j = await res.json().catch(()=>({})); return showNotice(j.error||j.detail||'שגיאה ביצירת קובץ', 'error'); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = res.headers.get('content-disposition') || '';
+    const m = disposition.match(/filename\*=UTF-8''(.+)$/) || disposition.match(/filename="?([^";]+)"?/);
+    let filename = 'family-hierarchy.xlsx';
+    if(m && m[1]) filename = decodeURIComponent(m[1]);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ showNotice('שגיאת רשת: ' + (e && e.message || e), 'error'); }
+});
 
 async function loadUsers(q){
   const url = '/api/users'+(q?('?q='+encodeURIComponent(q)): '');
@@ -309,11 +366,9 @@ async function loadUsers(q){
         }
     });
 
-    // when parent checkbox toggled, toggle children
-    checkbox.addEventListener('change', ()=>{
-      const checked = checkbox.checked;
-      childrenContainer.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.checked = checked);
-    });
+    // when selecting a recipient, select only that user (do not auto-toggle children)
+    // no-op event listener to keep default checkbox behavior
+    checkbox.addEventListener('change', ()=>{});
 
     // initially render children collapsed but present if any
     if(node.children && node.children.length){
@@ -350,8 +405,8 @@ let pendingRequestAction = 'self_edit';
 
 // edit profile / delete account (self) buttons
 document.getElementById('editProfileBtn').addEventListener('click', ()=>{
-  if(!requestModal) return alert('Modal not initialized');
-  if(!currentUser) return alert('אנא היכנס/י לפני עריכה');
+  if(!requestModal) return showNotice('שגיאה פנימית: חלון הבקשה אינו זמין', 'error');
+  if(!currentUser) return showNotice('אנא היכנס/י לפני ביצוע פעולה זו', 'warning');
   pendingRequestAction = 'self_edit';
   // prefill with current user
   const me = usersList.find(r=>String(r.id) === String(currentUser.id));
@@ -366,8 +421,8 @@ document.getElementById('editProfileBtn').addEventListener('click', ()=>{
 });
 
 document.getElementById('deleteAccountBtn').addEventListener('click', ()=>{
-  if(!requestModal) return alert('Modal not initialized');
-  if(!currentUser) return alert('אנא היכנס/י לפני שמחיקים חשבון');
+  if(!requestModal) return showNotice('שגיאה פנימית: חלון הבקשה אינו זמין', 'error');
+  if(!currentUser) return showNotice('אנא היכנס/י לפני ביצוע פעולה זו', 'warning');
   pendingRequestAction = 'self_remove';
   // show only name/email (readonly) and details for reason
   const me = usersList.find(r=>String(r.id) === String(currentUser.id));
@@ -382,23 +437,10 @@ document.getElementById('deleteAccountBtn').addEventListener('click', ()=>{
 });
 
 // add email button: opens modal to add a single new email to current user
-document.getElementById('addEmailBtn').addEventListener('click', ()=>{
-  if(!requestModal) return alert('Modal not initialized');
-  if(!currentUser) return alert('אנא היכנס/י לפני ביצוע פעולה');
-  pendingRequestAction = 'add_email';
-  const me = usersList.find(r=>String(r.id) === String(currentUser.id));
-  document.getElementById('requestName').value = (me && me.name) ? me.name : (currentUser.name || '');
-  document.getElementById('requestEmails').value = '';
-  document.getElementById('requestDetails').value = '';
-  document.getElementById('requestResult').textContent = '';
-  // name readonly while adding email
-  document.getElementById('requestName').setAttribute('readonly','');
-  document.getElementById('requestEmails').removeAttribute('readonly');
-  requestModal.show();
-});
+// addEmail removed per request
 // request add user: opens modal to send an add-user request to admin
 document.getElementById('requestAddUserBtn').addEventListener('click', ()=>{
-  if(!requestModal) return alert('Modal not initialized');
+  if(!requestModal) return showNotice('שגיאה פנימית: חלון הבקשה אינו זמין', 'error');
   pendingRequestAction = 'request_add_user';
   document.getElementById('requestName').value = '';
   document.getElementById('requestEmails').value = '';
@@ -410,6 +452,8 @@ document.getElementById('requestAddUserBtn').addEventListener('click', ()=>{
 });
 
 document.getElementById('requestSubmit').addEventListener('click', async ()=>{
+  if(!requestModal) return showNotice('שגיאה פנימית: חלון הבקשה אינו זמין', 'error');
+  if(!currentUser) return showNotice('אנא היכנס/י לפני ביצוע פעולה זו', 'warning');
   const action = pendingRequestAction;
   const name = document.getElementById('requestName').value.trim();
   const emails = document.getElementById('requestEmails').value.trim();
@@ -418,10 +462,12 @@ document.getElementById('requestSubmit').addEventListener('click', async ()=>{
   resultEl.textContent = 'שולח...';
   try{
     if(action === 'self_edit'){
-      // send PUT /api/me
-      const body = { name, emails: emails ? emails.split(',').map(s=>s.trim()).filter(Boolean) : [] };
-      const res = await fetch('/api/me',{method:'PUT',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(body)});
-      if(res.ok){ resultEl.className='text-success'; resultEl.textContent='הפרופיל עודכן'; setTimeout(()=> requestModal.hide(),900); loadUsers(); }
+      // send edit request to admin instead of updating immediately
+      const emailsArr = emails ? emails.split(',').map(s=>s.trim()).filter(Boolean) : [];
+      for(const em of emailsArr){ if(!isValidEmailClient(em)){ resultEl.className='text-danger'; resultEl.textContent='כתובת אימייל לא תקינה: ' + em; return; } }
+      const payload = { action: 'edit_user', details: `Edit request for: ${name}\nEmails: ${emailsArr.join(', ')}\n\n${details}`, extra: { edit_user: { name, emails: emailsArr } } };
+      const res = await fetch('/api/request-admin',{method:'POST',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(payload)});
+      if(res.ok){ resultEl.className='text-success'; resultEl.textContent='הבקשה נשלחה למנהל'; setTimeout(()=> requestModal.hide(),900); }
       else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
       return;
     }
@@ -431,26 +477,16 @@ document.getElementById('requestSubmit').addEventListener('click', async ()=>{
       else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
       return;
     }
-    if(action === 'add_email'){
-      const newEmail = emails.trim();
-      if(!newEmail) { resultEl.className='text-danger'; resultEl.textContent='נא להזין כתובת אימייל'; return; }
-      // get existing emails for user
-      const me = usersList.find(r=>String(r.id) === String(currentUser.id));
-      const existing = (me && Array.isArray(me.emails)) ? me.emails.slice() : (currentUser.email ? [currentUser.email] : []);
-      if(existing.includes(newEmail)) { resultEl.className='text-danger'; resultEl.textContent='כתובת כבר קיימת'; return; }
-      existing.push(newEmail);
-      const body = { emails: existing };
-      const res = await fetch('/api/me',{method:'PUT',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(body)});
-      if(res.ok){ resultEl.className = 'text-success'; resultEl.textContent = 'הכתובת נוספה'; setTimeout(()=>{ requestModal.hide(); loadUsers(); },900); }
-      else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
-      return;
-    }
+    // add_email flow removed; users must request admin to add emails
 
     if(action === 'request_add_user'){
       // send request to admin to add a new user (include optional father/grandfather)
       const father = document.getElementById('requestFather') ? document.getElementById('requestFather').value : '';
       const grandfather = document.getElementById('requestGrandfather') ? document.getElementById('requestGrandfather').value : '';
-      const payload = { action: 'add_user', details: `Name: ${name}\nEmails: ${emails}\n\n${details}`, extra: { father_id: father || null, grandfather_id: grandfather || null } };
+      // validate emails (comma-separated) before sending
+      const emailsArr = emails ? emails.split(',').map(s=>s.trim()).filter(Boolean) : [];
+      for(const em of emailsArr){ if(!isValidEmailClient(em)){ resultEl.className='text-danger'; resultEl.textContent='כתובת אימייל לא תקינה: ' + em; return; } }
+      const payload = { action: 'add_user', details: `Name: ${name}\nEmails: ${emailsArr.join(', ')}\n\n${details}`, extra: { father_id: father || null, grandfather_id: grandfather || null, emails: emailsArr } };
       const res = await fetch('/api/request-admin',{method:'POST',headers:{'content-type':'application/json', authorization: 'Bearer '+token},body:JSON.stringify(payload)});
       if(res.ok){ resultEl.className = 'text-success'; resultEl.textContent = 'הבקשה נשלחה למנהל'; setTimeout(()=> requestModal.hide(), 900); }
       else { const j = await res.json(); resultEl.className='text-danger'; resultEl.textContent = j.error || j.detail || 'שגיאה'; }
@@ -462,38 +498,74 @@ document.getElementById('requestSubmit').addEventListener('click', async ()=>{
   }catch(e){ resultEl.className='text-danger'; resultEl.textContent = 'שגיאת רשת'; }
 });
 
+const previewModalEl = document.getElementById('previewModal');
+const previewModal = previewModalEl ? new bootstrap.Modal(previewModalEl) : null;
+
+async function doSend(formData){
+  const res = await fetch('/api/send', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + token },
+    body: formData
+  });
+  const j = await res.json().catch(()=>({}));
+  return { res, json: j };
+}
+
 document.getElementById('sendForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const checked = Array.from(document.querySelectorAll('#recipients input:checked')).map(i=>i.value);
-  if(checked.length===0){alert('בחר נמענים');return}
+  if(checked.length===0){ showNotice('אנא בחר/י לפחות נמענים אחד', 'warning'); return }
   const subject = document.getElementById('subject').value;
-  const message = quill.root.innerHTML;  
-  const formData = new FormData();
+  const message = quill.root.innerHTML;
 
+  // populate preview
+  document.getElementById('previewSubject').textContent = subject || '(ללא נושא)';
+  // map recipient ids to names/emails
+  const recipNames = checked.map(id=>{
+    const u = usersList.find(r=>String(r.id)===String(id));
+    if(u) return `${u.name}${u.email?(' <'+u.email+'>'):''}`;
+    return id;
+  }).join(', ');
+  document.getElementById('previewRecipients').textContent = recipNames;
+  // render message HTML in preview (RTL)
+  const previewBody = document.getElementById('previewBody');
+  previewBody.innerHTML = message || '<div class="text-muted">(אין תוכן)</div>';
+  if(previewModal) previewModal.show();
+
+  // prepare FormData and attach to previewSendBtn dataset for later send
+  const formData = new FormData();
   formData.append('recipients', JSON.stringify(checked));
   formData.append('subject', subject);
   formData.append('message', message);
-
-  // קבצים מצורפים
   const fileInput = document.getElementById('files');
-  for (let i = 0; i < fileInput.files.length; i++) {
-    formData.append('files', fileInput.files[i]);
-  }
+  for (let i = 0; i < fileInput.files.length; i++) formData.append('files', fileInput.files[i]);
+  // stash the formData on the button
+  const sendBtn = document.getElementById('previewSendBtn');
+  sendBtn._formData = formData;
+});
 
-  const res = await fetch('/api/send', {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer ' + token
-    },
-    body: formData
-  });
-  // const res = await fetch('/api/send',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify({recipients:checked,subject,message})});
-  const j = await res.json();
-  const status = document.getElementById('status');
-  if(res.ok){ status.textContent='נשלח בהצלחה'; status.className='text-success'; } else { status.textContent=(j.error||j.detail||'שגיאה'); status.className='text-danger'; }
+document.getElementById('previewSendBtn').addEventListener('click', async (e)=>{
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = 'שולח...';
+  const fd = btn._formData;
+  if(!fd){ showNotice('טעות פנימית: טופס חסר', 'error'); btn.disabled=false; btn.textContent='אשר ושלח'; return; }
+  try{
+    const { res, json } = await doSend(fd);
+    const status = document.getElementById('status');
+    if(res.ok){ status.textContent='נשלח בהצלחה'; status.className='text-success'; showNotice('נשלח בהצלחה','success'); previewModal.hide(); }
+    else { status.textContent = (json.error || json.detail || 'שגיאה'); status.className='text-danger'; showNotice(json.error||json.detail||'שגיאה','error'); }
+  }catch(err){ showNotice('שגיאת רשת: '+(err&&err.message||err),'error'); }
+  finally{ btn.disabled=false; btn.textContent='אשר ושלח'; }
 });
 
 function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function isValidEmailClient(email){
+  if(!email || typeof email !== 'string') return false;
+  email = email.trim();
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return re.test(email);
+}
 </script>
 </body>
 </html>

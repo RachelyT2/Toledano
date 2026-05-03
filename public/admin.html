@@ -46,6 +46,9 @@
   </div>
 
   <div id="panel" class="d-none">
+    <div class="mb-2">
+      <button id="exportXlsxBtn" class="btn btn-sm btn-outline-primary">הורד Excel</button>
+    </div>
     <div class="mb-3">
       <label class="form-label">חפש</label>
       <input id="q" class="form-control">
@@ -71,12 +74,32 @@
       <button id="addBtn" class="btn btn-success">הוסף</button>
       <div id="addResult" class="mt-2 small"></div>
     </div>
+    <div class="card mb-3 p-3">
+      <h5>בקשות משתמשים</h5>
+      <div class="mb-2">
+        <button id="loadRequestsBtn" class="btn btn-outline-primary btn-sm">טען בקשות ממתינות</button>
+      </div>
+      <div id="requestsList" class="small"></div>
+    </div>
     <div id="list"></div>
   </div>
 </main>
 
 <script>
 let token = null;
+
+function showNotice(msg, type = 'info', timeout = 4500){
+  try{
+    const containerId = 'notice-container';
+    let container = document.getElementById(containerId);
+    if(!container){ container = document.createElement('div'); container.id = containerId; container.style.position = 'fixed'; container.style.top = '16px'; container.style.left = '50%'; container.style.transform = 'translateX(-50%)'; container.style.zIndex = '1050'; document.body.appendChild(container); }
+    const cls = { info: 'alert-primary', success: 'alert-success', danger: 'alert-danger', warning: 'alert-warning' }[type] || 'alert-primary';
+    const d = document.createElement('div'); d.className = 'alert ' + cls; d.style.minWidth = '240px'; d.style.textAlign = 'center'; d.style.margin = '6px'; d.textContent = msg;
+    container.appendChild(d);
+    setTimeout(()=>{ d.classList.add('fade'); d.style.transition = 'opacity .25s'; d.style.opacity = '0'; setTimeout(()=>d.remove(),300); }, timeout);
+    return d;
+  }catch(e){ console.warn('showNotice failed', e); }
+}
 
 function isTokenValidRaw(tok){
   try{
@@ -234,7 +257,7 @@ async function load(){
   const list = document.getElementById('list'); list.innerHTML='';
   // populate parent select from flat users list
   const usersRes = await apiFetch('/api/users');
-  if(!usersRes.ok){ alert('שגיאת הרשאה'); return }
+  if(!usersRes.ok){ showNotice('שגיאת הרשאה','danger'); return }
   const usersFlat = await usersRes.json();
   const parentSelect = document.getElementById('newParentSelect');
   parentSelect.innerHTML = '<option value="">--- ללא הורה ---</option>';
@@ -243,7 +266,7 @@ async function load(){
   if(q){
     // search mode: fetch flat users and build tree client-side
     const res = await apiFetch('/api/users?q='+encodeURIComponent(q));
-    if(!res.ok){ alert('שגיאת הרשאה'); return }
+    if(!res.ok){ showNotice('שגיאת הרשאה','danger'); return }
     const rows = await res.json();
     const roots = buildTree(rows);
     function appendChildren(parentEl, children, depth=0){
@@ -258,7 +281,7 @@ async function load(){
   } else {
     // full tree from server
     const res = await apiFetch('/api/tree');
-    if(!res.ok){ alert('שגיאת הרשאה'); return }
+    if(!res.ok){ showNotice('שגיאת הרשאה','danger'); return }
     const tree = await res.json();
     // render recursive tree
     function renderTree(nodes, parentEl, depth=0){
@@ -276,34 +299,72 @@ async function load(){
   list.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', async e=>{
     if(!confirm('להסיר משתמש?')) return;
     const id = btn.getAttribute('data-del') || e.currentTarget.getAttribute('data-del');
-    try{
+      try{
       const res = await fetch('/api/users/'+id,{method:'DELETE',headers:{authorization:'Bearer '+token}});
-      if(!res.ok){ const j = await res.json(); alert(j.error||j.detail||'שגיאה במחיקה'); }
-    }catch(err){ alert('שגיאת רשת: ' + (err.message||err)); }
+      if(!res.ok){ const j = await res.json(); showNotice(j.error||j.detail||'שגיאה במחיקה','danger'); }
+    }catch(err){ showNotice('שגיאת רשת: ' + (err.message||err),'danger'); }
     load();
   }));
   list.querySelectorAll('[data-resend]').forEach(btn=>btn.addEventListener('click', async e=>{
     if(!confirm('לשלוח אימות מחדש למשתמש זה?')) return;
     const id = btn.getAttribute('data-resend');
     const prev = btn.innerHTML;
-    try {
+      try {
       btn.disabled = true;
       btn.innerHTML = 'שולח...';
       const res = await fetch('/api/users/'+id+'/resend',{method:'POST',headers:{authorization:'Bearer '+token}});
       let j = {};
       try { j = await res.json(); } catch(_){ }
-      if (res.ok) alert('נשלח אימות'); else alert(j.error || j.detail || 'שגיאה בשליחת אימות');
-    } catch (err){ alert('שגיאת רשת: ' + (err.message || err)); }
+      if (res.ok) showNotice('נשלח אימות','success'); else showNotice(j.error || j.detail || 'שגיאה בשליחת אימות','danger');
+    } catch (err){ showNotice('שגיאת רשת: ' + (err.message || err),'danger'); }
     finally{ btn.disabled = false; btn.innerHTML = prev; load(); }
   }));
   list.querySelectorAll('[data-edit]').forEach(btn=>btn.addEventListener('click', e=>editUser(e.target.getAttribute('data-edit'))));
   list.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click', e=>addChildPrompt(e.target.getAttribute('data-add'))));
 }
 
+  // Requests handling
+  document.getElementById('loadRequestsBtn').addEventListener('click', async ()=>{
+    const container = document.getElementById('requestsList'); container.innerHTML = 'טוען...';
+    try{
+      const res = await apiFetch('/api/requests');
+      if(!res.ok){ container.innerHTML = '<div class="text-danger">שגיאת הרשאה</div>'; return }
+      const rows = await res.json();
+      if(rows.length === 0){ container.innerHTML = '<div class="text-muted">אין בקשות ממתינות</div>'; return }
+      container.innerHTML = '';
+      rows.forEach(r=>{
+        const wrap = document.createElement('div'); wrap.className='mb-2 p-2'; wrap.style.borderBottom='1px solid #eee';
+        const who = `<div><strong>${escapeHtml(r.requester_name||'') }</strong> &lt;${escapeHtml(r.requester_email||'')}&gt; — ${escapeHtml(r.created_at)}</div>`;
+        const action = `<div class="small text-muted">פעולה: ${escapeHtml(r.action||'')}</div>`;
+        const details = `<pre style="white-space:pre-wrap;">${escapeHtml(r.details||'')}</pre>`;
+        const extra = `<div class="small">${escapeHtml(JSON.stringify(r.extra||{}))}</div>`;
+        const approveBtn = document.createElement('button'); approveBtn.className='btn btn-sm btn-success me-1'; approveBtn.textContent='אשר';
+        const denyBtn = document.createElement('button'); denyBtn.className='btn btn-sm btn-danger'; denyBtn.textContent='דחה';
+        approveBtn.addEventListener('click', async ()=>{
+          approveBtn.disabled = true; denyBtn.disabled = true; approveBtn.textContent='מעבד...';
+          const res = await apiFetch('/api/requests/'+r.id+'/approve',{ method: 'POST' });
+          if(res.ok) { approveBtn.textContent='אושר'; loadRequests(); } else { const j=await res.json().catch(()=>({})); showNotice(j.error||'שגיאה','danger'); approveBtn.disabled=false; denyBtn.disabled=false; approveBtn.textContent='אשר'; }
+        });
+        denyBtn.addEventListener('click', async ()=>{
+          const reason = prompt('סיבת הדחיה (אופציונלי):');
+          if(reason === null) return; // cancelled
+          denyBtn.disabled = true; approveBtn.disabled = true; denyBtn.textContent='מעבד...';
+          const res = await apiFetch('/api/requests/'+r.id+'/deny',{ method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ reason }) });
+          if(res.ok) { denyBtn.textContent='נדחה'; loadRequests(); } else { const j=await res.json().catch(()=>({})); showNotice(j.error||'שגיאה','danger'); denyBtn.disabled=false; approveBtn.disabled=false; denyBtn.textContent='דחה'; }
+        });
+        wrap.innerHTML = who + action + details + extra;
+        const ctrl = document.createElement('div'); ctrl.appendChild(approveBtn); ctrl.appendChild(denyBtn); wrap.appendChild(ctrl);
+        container.appendChild(wrap);
+      });
+    }catch(e){ container.innerHTML = '<div class="text-danger">שגיאת רשת</div>'; }
+  });
+
+  async function loadRequests(){ try{ document.getElementById('loadRequestsBtn').click(); }catch(e){} }
+
 async function editUser(id){
   // fetch flat users for parent choices
   const resAll = await fetch('/api/users',{headers:{authorization:'Bearer '+token}});
-  if(!resAll.ok){ alert('שגיאת הרשאה'); return }
+  if(!resAll.ok){ showNotice('שגיאת הרשאה','danger'); return }
   const rows = await resAll.json();
   const existing = rows.find(r=>String(r.id)===String(id)) || {};
   const name = prompt('שם חדש', existing.name) || existing.name;
@@ -325,7 +386,7 @@ async function addChildPrompt(parentId){
   const is_admin = confirm('להעניק הרשאת מנהל?');
   const res = await fetch('/api/users',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({name,email,is_admin,parent_id: parseInt(parentId)})});
   const j = await res.json();
-  if(res.ok) alert('נוצר משתמש — המשתמש יקבל מייל עם סיסמה זמנית'); else alert(j.error||j.detail||'שגיאה');
+  if(res.ok) showNotice('נוצר משתמש — המשתמש יקבל מייל עם סיסמה זמנית','success'); else showNotice(j.error||j.detail||'שגיאה','danger');
   load();
 }
 
@@ -342,6 +403,29 @@ document.getElementById('addBtn').addEventListener('click', async ()=>{
 });
 
 function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// Export Excel handler
+document.getElementById('exportXlsxBtn').addEventListener('click', async ()=>{
+  if(!token) return showNotice('אנא היכנס/י כמנהל לפני הורדה','warning');
+  try{
+    const res = await apiFetch('/api/export-xlsx');
+    if(!res.ok){ const j = await res.json().catch(()=>({})); return showNotice(j.error||j.detail||'שגיאה ביצירת קובץ','danger'); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = res.headers.get('content-disposition') || '';
+    const m = disposition.match(/filename\*=UTF-8''(.+)$/) || disposition.match(/filename="?([^";]+)"?/);
+    let filename = 'family-hierarchy.xlsx';
+    if(m && m[1]) filename = decodeURIComponent(m[1]);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ showNotice('שגיאת רשת: ' + (e && e.message || e),'danger'); }
+});
 </script>
+
 </body>
 </html>
