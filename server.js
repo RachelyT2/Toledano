@@ -10,7 +10,12 @@ const { open } = require('sqlite');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
 require('dotenv').config();
+const { Pool } = require('pg');
 
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false } // חשוב ל-Neon
+});
 const app = express();
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -29,6 +34,16 @@ function sanitizeHtml(html){
 function getBaseUrl(req) {
   return process.env.BASE_URL || (req.protocol + '://' + req.get('host'));
 }
+async function testDb() {
+  try {
+    const res = await pool.query('SELECT NOW()');
+    console.log('DB connected:', res.rows[0]);
+  } catch (err) {
+    console.error('DB error:', err);
+  }
+}
+
+testDb();
 async function initDb() {
   const db = await open({ filename: DB_PATH, driver: sqlite3.Database });
   await db.exec(`
