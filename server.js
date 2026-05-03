@@ -26,6 +26,9 @@ function sanitizeHtml(html){
     .replace(/<script.*?>.*?<\/script>/gi, '')
     .replace(/on\w+=".*?"/g, '');
 }
+function getBaseUrl(req) {
+  return process.env.BASE_URL || (req.protocol + '://' + req.get('host'));
+}
 async function initDb() {
   const db = await open({ filename: DB_PATH, driver: sqlite3.Database });
   await db.exec(`
@@ -212,7 +215,7 @@ app.post('/api/register', async (req, res) => {
     }
     const result = await db.run('INSERT INTO users (name,email,password_hash,is_admin,verified,verification_token,parent,grandparent,parent_id,parents,emails) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [name, emailsToStore[0], hash, is_admin ? 1 : 0, 0, token, parent || null, grandparent || null, parent_id, JSON.stringify(parentsToStore), JSON.stringify(emailsToStore)]);
     // send verification email
-    const base = req.protocol + '://' + req.get('host');
+    const base = getBaseUrl(req);
     await sendVerificationEmail(email, name, token, base);
     await notifyAdmin(`${name} <${email}> was added to the family list.`);
     res.json({ id: result.lastID });
@@ -257,7 +260,7 @@ app.post('/api/users', authMiddleware, async (req, res) => {
       if(!v2.ok) return res.status(400).json({ error: v2.error });
     }
     const result = await db.run('INSERT INTO users (name,email,password_hash,is_admin,verified,verification_token,parent,grandparent,parent_id,parents,emails) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [name, emailsToStore[0], hash, is_admin ? 1 : 0, 0, token, parent || null, grandparent || null, parent_id, JSON.stringify(parentsToStore), JSON.stringify(emailsToStore)]);
-    const base = req.protocol + '://' + req.get('host');
+    const base = getBaseUrl(req);
     // send welcome email with temporary password to the new user (do not return password to admin)
     await sendNewUserWelcomeEmail(emailsToStore[0], name, tempPassword, token, base);
     await notifyAdmin(`Admin ${req.user.email} added: ${name} <${emailsToStore[0]}>`);
@@ -275,7 +278,7 @@ app.post('/api/resend-verification', authMiddleware, async (req, res) => {
   const crypto = require('crypto');
   const token = crypto.randomBytes(24).toString('hex');
   await db.run('UPDATE users SET verification_token=? WHERE id=?', [token, user.id]);
-  const base = req.protocol + '://' + req.get('host');
+  const base = getBaseUrl(req);
   await sendVerificationEmail(user.email, user.name, token, base);
   res.json({ ok: true });
 });
@@ -312,7 +315,7 @@ app.post('/api/users/:id/resend', authMiddleware, async (req, res) => {
   const crypto = require('crypto');
   const token = crypto.randomBytes(24).toString('hex');
   await db.run('UPDATE users SET verification_token=? WHERE id=?', [token, user.id]);
-  const base = req.protocol + '://' + req.get('host');
+  const base = getBaseUrl(req);
   await sendVerificationEmail(user.email, user.name, token, base);
   res.json({ ok: true });
 });
@@ -374,7 +377,7 @@ app.put('/api/users/:id', authMiddleware, async (req, res) => {
     }
     await db.run('UPDATE users SET name=?, email=?, is_admin=?, verified=?, verification_token=?, parent=?, grandparent=?, parent_id=?, parents=?, emails=? WHERE id=?', [name || existing.name, newEmail, is_admin ? 1 : 0, willChangeEmail ? 0 : existing.verified, willChangeEmail ? token : existing.verification_token, parent===undefined?existing.parent:parent, grandparent===undefined?existing.grandparent:grandparent, parent_id===undefined?existing.parent_id:parent_id, JSON.stringify(parentsToStore), JSON.stringify(emailsToStore), id]);
     if (willChangeEmail) {
-      const base = req.protocol + '://' + req.get('host');
+      const base = getBaseUrl(req);
       if (!isValidEmail(newEmail)) return res.status(400).json({ error: 'invalid email' });
       await sendVerificationEmail(newEmail, name || existing.name, token, base);
     }
@@ -729,7 +732,7 @@ app.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
       }
       const parentsToStore = JSON.stringify(parentsToStoreArr || []);
       const result = await db.run('INSERT INTO users (name,email,password_hash,is_admin,verified,verification_token,parent,grandparent,parent_id,parents,emails,phone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [name, emailPrimary, hash, is_admin, 0, token, parentName || null, grandparentName || null, parent_id, parentsToStore, JSON.stringify(emailsArr||[emailPrimary]), phone]);
-      const base = req.protocol + '://' + req.get('host');
+      const base = getBaseUrl(req);
       await sendNewUserWelcomeEmail(emailPrimary, name, tempPassword, token, base);
       const resultMsg = 'approved: created user id '+result.lastID;
       await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
