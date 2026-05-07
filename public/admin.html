@@ -343,14 +343,14 @@ async function load(){
         approveBtn.addEventListener('click', async ()=>{
           approveBtn.disabled = true; denyBtn.disabled = true; approveBtn.textContent='מעבד...';
           const res = await apiFetch('/api/requests/'+r.id+'/approve',{ method: 'POST' });
-          if(res.ok) { approveBtn.textContent='אושר'; loadRequests(); } else { const j=await res.json().catch(()=>({})); showNotice(j.error||'שגיאה','danger'); approveBtn.disabled=false; denyBtn.disabled=false; approveBtn.textContent='אשר'; }
+          if(res.ok) { approveBtn.textContent='אושר'; try{ await load(); }catch(e){}; loadRequests(); } else { const j=await res.json().catch(()=>({})); showNotice(j.error||'שגיאה','danger'); approveBtn.disabled=false; denyBtn.disabled=false; approveBtn.textContent='אשר'; }
         });
         denyBtn.addEventListener('click', async ()=>{
           const reason = prompt('סיבת הדחיה (אופציונלי):');
           if(reason === null) return; // cancelled
           denyBtn.disabled = true; approveBtn.disabled = true; denyBtn.textContent='מעבד...';
           const res = await apiFetch('/api/requests/'+r.id+'/deny',{ method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ reason }) });
-          if(res.ok) { denyBtn.textContent='נדחה'; loadRequests(); } else { const j=await res.json().catch(()=>({})); showNotice(j.error||'שגיאה','danger'); denyBtn.disabled=false; approveBtn.disabled=false; denyBtn.textContent='דחה'; }
+          if(res.ok) { denyBtn.textContent='נדחה'; try{ await load(); }catch(e){}; loadRequests(); } else { const j=await res.json().catch(()=>({})); showNotice(j.error||'שגיאה','danger'); denyBtn.disabled=false; approveBtn.disabled=false; denyBtn.textContent='דחה'; }
         });
         wrap.innerHTML = who + action + details + extra;
         const ctrl = document.createElement('div'); ctrl.appendChild(approveBtn); ctrl.appendChild(denyBtn); wrap.appendChild(ctrl);
