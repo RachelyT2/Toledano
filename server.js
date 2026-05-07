@@ -258,7 +258,7 @@ function isValidEmail(email) {
 
 async function getTransport() {
   const transport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.example.com',
+    host: process.env.SMTP_HOST,
     port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 587,
     secure: process.env.SMTP_SECURE === 'true',
     auth: {
