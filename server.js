@@ -268,32 +268,40 @@ async function getTransport() {
   });
   return transport;
 }
-
 async function safeSendMail(mailOptions){
   try{
     const transport = await getTransport();
-    const info = await transport.sendMail(mailOptions);
-    return info;
+    return await transport.sendMail(mailOptions);
   }catch(e){
-    console.error('Primary SMTP send failed:', e && e.message ? e.message : e);
-    try{
-      const testAccount = await nodemailer.createTestAccount();
-      const testTransport = nodemailer.createTransport({
-        host: testAccount.smtp.host,
-        port: testAccount.smtp.port,
-        secure: testAccount.smtp.secure,
-        auth: { user: testAccount.user, pass: testAccount.pass }
-      });
-      const info = await testTransport.sendMail(mailOptions);
-      const preview = nodemailer.getTestMessageUrl(info);
-      if(preview) console.log('Ethereal preview URL:', preview);
-      return info;
-    }catch(err){
-      console.error('Fallback test account send failed:', err && err.message ? err.message : err);
-      throw err;
-    }
+    console.error('SMTP send failed:', e);
+    throw e;
   }
 }
+// async function safeSendMail(mailOptions){
+//   try{
+//     const transport = await getTransport();
+//     const info = await transport.sendMail(mailOptions);
+//     return info;
+//   }catch(e){
+//     console.error('Primary SMTP send failed:', e && e.message ? e.message : e);
+//     try{
+//       const testAccount = await nodemailer.createTestAccount();
+//       const testTransport = nodemailer.createTransport({
+//         host: testAccount.smtp.host,
+//         port: testAccount.smtp.port,
+//         secure: testAccount.smtp.secure,
+//         auth: { user: testAccount.user, pass: testAccount.pass }
+//       });
+//       const info = await testTransport.sendMail(mailOptions);
+//       const preview = nodemailer.getTestMessageUrl(info);
+//       if(preview) console.log('Ethereal preview URL:', preview);
+//       return info;
+//     }catch(err){
+//       console.error('Fallback test account send failed:', err && err.message ? err.message : err);
+//       throw err;
+//     }
+//   }
+// }
 
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization;
