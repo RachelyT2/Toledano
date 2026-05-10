@@ -28,6 +28,9 @@
     .level-4 .node-card { background:#fffaf0; border-color:#f7ecd7; }
   </style>
 </head>
+<script>
+  alert("INLINE SCRIPT WORKS");
+</script>
 <body class="bg-white">
 <main class="container py-4">
   <h1>ניהול רשימת משפחה</h1>
@@ -86,6 +89,8 @@
 </main>
 
 <script>
+console.log("JS loaded2");
+
 let token = null;
 
 function showNotice(msg, type = 'info', timeout = 4500){
