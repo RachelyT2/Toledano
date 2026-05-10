@@ -2,6 +2,11 @@ const nodemailer = require('nodemailer');
 const { escapeHtml } = require('./helpers');
 
 async function getTransport() {
+  console.log({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    user: process.env.SMTP_USER
+  });
   const transport = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 587,
