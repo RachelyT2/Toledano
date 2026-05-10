@@ -38,8 +38,12 @@ function getBaseUrl(req) {
   return process.env.BASE_URL || (req.protocol + '://' + req.get('host'));
 }
 function runAsync(fn) {
-  setTimeout(() => {
-    fn().catch(console.error);
+  setTimeout(async () => {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(err);
+    }
   }, 0);
 }
 async function testDb() {
