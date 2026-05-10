@@ -37,6 +37,11 @@ function sanitizeHtml(html){
 function getBaseUrl(req) {
   return process.env.BASE_URL || (req.protocol + '://' + req.get('host'));
 }
+function runAsync(fn) {
+  setTimeout(() => {
+    fn().catch(console.error);
+  }, 0);
+}
 async function testDb() {
   try {
     const res = await pool.query('SELECT NOW()');
@@ -1113,29 +1118,79 @@ async function notifyAdmin(text) {
 app.post('/api/request-admin', authMiddleware, async (req, res) => {
   const { action, details } = req.body || {};
   console.log('REQUEST HIT /api/request-admin');
-  if (!process.env.ADMIN_EMAIL) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
-  const user = req.user;
-  const subj = `בקשת מנהל: ${action || 'כללי'} - ${user.name}`;
-  const extra = req.body.extra || {};
-  let text = `User: ${user.name} <${user.email}>\nAction: ${action || ''}\n\nDetails:\n${details || ''}`;
-  if(extra.father_id) text += `\nFather ID: ${extra.father_id}`;
-  if(extra.grandfather_id) text += `\nGrandfather ID: ${extra.grandfather_id}`;
-  try{
-    // const db = await initDb();
-    // store request for admin review
-    // const insert = await db.run('INSERT INTO requests (user_id, action, details, extra) VALUES (?,?,?,?)', [user.id, action || '', details || '', JSON.stringify(extra || {})]);
-    const { rows } = await pool.query(`INSERT INTO requests (user_id, action, details, extra) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [user.id, action || '', details || '', JSON.stringify(extra || {})]
-    );
-    console.log('INSERT RESULT:', rows[0].id);
-    const requestId = rows[0].id;
-  
-    // await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: process.env.ADMIN_EMAIL, subject: subj, text, replyTo: `${user.name} <${user.email}>` });
-    // // res.json({ ok: true, requestId: insert.lastID });
-    // res.json({ ok: true, requestId });
 
-  }catch(e){ res.status(500).json({ error: 'failed to send', detail: e.message }); }
+  if (!process.env.ADMIN_EMAIL)
+    return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
+
+  const user = req.user;
+  const extra = req.body.extra || {};
+
+  const subj = `בקשת מנהל: ${action || 'כללי'} - ${user.name}`;
+
+  let text =
+    `User: ${user.name} <${user.email}>\n` +
+    `Action: ${action || ''}\n\n` +
+    `Details:\n${details || ''}`;
+
+  if (extra.father_id) text += `\nFather ID: ${extra.father_id}`;
+  if (extra.grandfather_id) text += `\nGrandfather ID: ${extra.grandfather_id}`;
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO requests (user_id, action, details, extra)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id`,
+      [user.id, action || '', details || '', JSON.stringify(extra || {})]
+    );
+
+    const requestId = rows[0].id;
+    console.log('INSERT RESULT:', requestId);
+
+    res.json({ ok: true, requestId });
+
+    setTimeout(() => {
+      safeSendMail({
+        from: process.env.SMTP_USER || 'no-reply@example.com',
+        to: process.env.ADMIN_EMAIL,
+        subject: subj,
+        text,
+        replyTo: `${user.name} <${user.email}>`
+      }).catch(err => {
+        console.error('ADMIN EMAIL FAILED:', err);
+      });
+    }, 0);
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'failed to send', detail: e.message });
+  }
 });
+// app.post('/api/request-admin', authMiddleware, async (req, res) => {
+//   const { action, details } = req.body || {};
+//   console.log('REQUEST HIT /api/request-admin');
+//   if (!process.env.ADMIN_EMAIL) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
+//   const user = req.user;
+//   const subj = `בקשת מנהל: ${action || 'כללי'} - ${user.name}`;
+//   const extra = req.body.extra || {};
+//   let text = `User: ${user.name} <${user.email}>\nAction: ${action || ''}\n\nDetails:\n${details || ''}`;
+//   if(extra.father_id) text += `\nFather ID: ${extra.father_id}`;
+//   if(extra.grandfather_id) text += `\nGrandfather ID: ${extra.grandfather_id}`;
+//   try{
+//     // const db = await initDb();
+//     // store request for admin review
+//     // const insert = await db.run('INSERT INTO requests (user_id, action, details, extra) VALUES (?,?,?,?)', [user.id, action || '', details || '', JSON.stringify(extra || {})]);
+//     const { rows } = await pool.query(`INSERT INTO requests (user_id, action, details, extra) VALUES ($1, $2, $3, $4) RETURNING id`,
+//     [user.id, action || '', details || '', JSON.stringify(extra || {})]
+//     );
+//     console.log('INSERT RESULT:', rows[0].id);
+//     const requestId = rows[0].id;
+  
+//     await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: process.env.ADMIN_EMAIL, subject: subj, text, replyTo: `${user.name} <${user.email}>` });
+//     // res.json({ ok: true, requestId: insert.lastID });
+//     res.json({ ok: true, requestId });
+
+//   }catch(e){ res.status(500).json({ error: 'failed to send', detail: e.message }); }
+// });
 
 // List pending requests (admin)
 // app.get('/api/requests', authMiddleware, async (req, res) => {
@@ -1278,15 +1333,36 @@ app.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
       const resultMsg = 'approved: created user id '+result.lastID;
       await pool.query(`UPDATE requests SET processed = 1,processed_by = $1,processed_at = NOW(),result = $2 WHERE id = $3`,[actorId, resultMsg, id]);
       // await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [actorId, resultMsg, id]);
-      try{
+      // try{
 
-        // const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
-        const requesterRes = await pool.query('SELECT * FROM users WHERE id = $1',[row.user_id]);
-        const requester = requesterRes.rows[0];
-        if(requester && requester.email){
-          await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך ליצור משתמש אושרה. נוצר משתמש עם מזהה ${result.lastID}.\n\nבברכה, מנהל המערכת.` });
+      //   // const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+      //   const requesterRes = await pool.query('SELECT * FROM users WHERE id = $1',[row.user_id]);
+      //   const requester = requesterRes.rows[0];
+      //   if(requester && requester.email){
+      //     await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך ליצור משתמש אושרה. נוצר משתמש עם מזהה ${result.lastID}.\n\nבברכה, מנהל המערכת.` });
+      //   }
+      // }catch(_){ }
+      try {
+          const requesterRes = await pool.query(
+            'SELECT * FROM users WHERE id = $1',
+            [row.user_id]
+          );
+
+          const requester = requesterRes.rows[0];
+
+          if (requester && requester.email) {
+            runAsync(() =>
+              safeSendMail({
+                from: process.env.SMTP_USER || 'no-reply@example.com',
+                to: requester.email,
+                subject: 'בקשתך אושרה',
+                text: `שלום ${requester.name || ''},\n\nבקשתך ליצור משתמש אושרה. נוצר משתמש עם מזהה ${result.lastID}.\n\nבברכה, מנהל המערכת.`
+              })
+            );
+          }
+        } catch (e) {
+          console.error('requester mail failed:', e);
         }
-      }catch(_){ }
       return res.json({ ok:true, createdId: result.lastID });
     }
     if(row.action === 'edit_user' || extra.edit_user){
@@ -1371,8 +1447,21 @@ app.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
           [row.user_id]
         );
         const requester = requesterRes.rows[0];
-        if(requester && requester.email){ await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך לערוך משתמש (${targetId}) אושרה והעדכונים בוצעו.\n\nבברכה, מנהל המערכת.` }); }
-      }catch(_){ }
+        if(requester && requester.email)
+          { runAsync(() =>(
+            { from: process.env.SMTP_USER || 'no-reply@example.com',
+               to: requester.email,
+                subject: 'בקשתך אושרה',
+                 text: `שלום ${requester.name || ''},
+                 \n\nבקשתך לערוך משתמש (${targetId}) אושרה והעדכונים בוצעו.\n\nבברכה, מנהל המערכת.`
+                 })
+                );
+                }
+      }catch(e){
+       console.error('requester mail failed:', e);
+
+      }
+
       return res.json({ ok:true, editedId: targetId });
     }
     if(row.action === 'delete_user' || extra.delete_user){
@@ -1404,15 +1493,45 @@ app.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
           WHERE id = $3`,
           [actorId, resultMsg, id]
         );
-        try{ 
-          // const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+      //   try{ 
+      //     // const requester = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+      //     const requesterRes = await pool.query(
+      //       'SELECT * FROM users WHERE id = $1',
+      //       [row.user_id]
+      //     );
+      //     const requester = requesterRes.rows[0];
+      //     if(requester && requester.email){ 
+      //       await safeSendMail(
+      //         { from: process.env.SMTP_USER || 'no-reply@example.com',
+      //           to: requester.email,
+      //           subject: 'בקשתך אושרה',
+      //           text: `שלום ${requester.name || ''},\n\nבקשתך להסיר משתמש אושרה. המשתמש שסומן מכיל ילדים ולכן הוסר כתובת המייל והועלה למצב 'ללא מייל'.\n\nבברכה, מנהל המערכת.` }); } }catch(_){ }
+        
+      //         return res.json({ ok:true, replaced:true });
+      // }
+      try {
           const requesterRes = await pool.query(
             'SELECT * FROM users WHERE id = $1',
             [row.user_id]
           );
+
           const requester = requesterRes.rows[0];
-          if(requester && requester.email){ await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך להסיר משתמש אושרה. המשתמש שסומן מכיל ילדים ולכן הוסר כתובת המייל והועלה למצב 'ללא מייל'.\n\nבברכה, מנהל המערכת.` }); } }catch(_){ }
-        return res.json({ ok:true, replaced:true });
+
+          if (requester && requester.email) {
+            runAsync(() =>
+              safeSendMail({
+                from: process.env.SMTP_USER || 'no-reply@example.com',
+                to: requester.email,
+                subject: 'בקשתך אושרה',
+                text: `שלום ${requester.name || ''},\n\nבקשתך להסיר משתמש אושרה. המשתמש שסומן מכיל ילדים ולכן הוסר כתובת המייל והועלה למצב 'ללא מייל'.\n\nבברכה, מנהל המערכת.`
+              })
+            );
+          }
+        } catch (e) {
+          console.error('requester mail failed:', e);
+        }
+
+        return res.json({ ok: true, replaced: true });
       }
       // orphan children and delete
       
@@ -1506,48 +1625,124 @@ app.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
 });
 
 // Deny a request (admin)
+// app.post('/api/requests/:id/deny', authMiddleware, async (req, res) => {
+//   if(!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
+//   const { id } = req.params;
+//   const reason = req.body && req.body.reason ? String(req.body.reason) : '';
+//   // const db = await initDb();
+//   // const row = await db.get('SELECT * FROM requests WHERE id = ?', [id]);
+//   const rowRes = await pool.query(
+//       'SELECT * FROM requests WHERE id = $1',
+//       [id]
+//     );
+//   const row = rowRes.rows[0];
+//   if(!row) return res.status(404).json({ error: 'request not found' });
+//   if(row.processed) return res.status(400).json({ error: 'already processed' });
+//   const resultMsg = 'denied' + (reason ? (': ' + reason) : '');
+//   // await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [req.user.id, resultMsg, id]);
+//   await pool.query(
+//     `UPDATE requests 
+//     SET processed = 1,
+//         processed_by = $1,
+//         processed_at = CURRENT_TIMESTAMP,
+//         result = $2
+//     WHERE id = $3`,
+//     [req.user.id, resultMsg, id]
+//   );
+//   try{
+//     // const ruser = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+//     const ruserRes = await pool.query(
+//         'SELECT * FROM users WHERE id = $1',
+//         [row.user_id]
+//       );
+//     const ruser = ruserRes.rows[0];
+//     if(ruser && ruser.email){
+//       const subject = 'בקשת מנהל נדחתה';
+//       let text = `שלום ${ruser.name || ''},\n\nבקשתך נדחתה על ידי המנהל.`;
+//       if(reason) text += `\n\nסיבת הדחיה:\n${reason}`;
+//       text += '\n\nאם ברצונך לקבל הבהרות נוספות, פנה למנהל.';
+//       await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: ruser.email, subject, text });
+//     }
+//   }catch(_){ }
+//   res.json({ ok:true });
+// });
 app.post('/api/requests/:id/deny', authMiddleware, async (req, res) => {
-  if(!req.user.is_admin) return res.status(403).json({ error: 'admin required' });
+  if (!req.user.is_admin)
+    return res.status(403).json({ error: 'admin required' });
+
   const { id } = req.params;
   const reason = req.body && req.body.reason ? String(req.body.reason) : '';
-  // const db = await initDb();
-  // const row = await db.get('SELECT * FROM requests WHERE id = ?', [id]);
-  const rowRes = await pool.query(
+
+  try {
+    const rowRes = await pool.query(
       'SELECT * FROM requests WHERE id = $1',
       [id]
     );
-  const row = rowRes.rows[0];
-  if(!row) return res.status(404).json({ error: 'request not found' });
-  if(row.processed) return res.status(400).json({ error: 'already processed' });
-  const resultMsg = 'denied' + (reason ? (': ' + reason) : '');
-  // await db.run('UPDATE requests SET processed=1, processed_by=?, processed_at=CURRENT_TIMESTAMP, result=? WHERE id=?', [req.user.id, resultMsg, id]);
-  await pool.query(
-    `UPDATE requests 
-    SET processed = 1,
-        processed_by = $1,
-        processed_at = CURRENT_TIMESTAMP,
-        result = $2
-    WHERE id = $3`,
-    [req.user.id, resultMsg, id]
-  );
-  try{
-    // const ruser = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
-    const ruserRes = await pool.query(
+
+    const row = rowRes.rows[0];
+
+    if (!row)
+      return res.status(404).json({ error: 'request not found' });
+
+    if (row.processed)
+      return res.status(400).json({ error: 'already processed' });
+
+    const resultMsg = 'denied' + (reason ? ': ' + reason : '');
+
+    // עדכון DB (חלק קריטי)
+    await pool.query(
+      `UPDATE requests 
+       SET processed = 1,
+           processed_by = $1,
+           processed_at = CURRENT_TIMESTAMP,
+           result = $2
+       WHERE id = $3`,
+      [req.user.id, resultMsg, id]
+    );
+
+    // שליפת משתמש מבקש
+    let ruser = null;
+    try {
+      const ruserRes = await pool.query(
         'SELECT * FROM users WHERE id = $1',
         [row.user_id]
       );
-    const ruser = ruserRes.rows[0];
-    if(ruser && ruser.email){
-      const subject = 'בקשת מנהל נדחתה';
-      let text = `שלום ${ruser.name || ''},\n\nבקשתך נדחתה על ידי המנהל.`;
-      if(reason) text += `\n\nסיבת הדחיה:\n${reason}`;
-      text += '\n\nאם ברצונך לקבל הבהרות נוספות, פנה למנהל.';
-      await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: ruser.email, subject, text });
+      ruser = ruserRes.rows[0];
+    } catch (e) {
+      console.error('failed to load user:', e);
     }
-  }catch(_){ }
-  res.json({ ok:true });
-});
 
+    // מייל ברקע (לא חוסם את הכפתור)
+    if (ruser && ruser.email) {
+      setTimeout(() => {
+        const subject = 'בקשת מנהל נדחתה';
+
+        let text = `שלום ${ruser.name || ''},\n\nבקשתך נדחתה על ידי המנהל.`;
+
+        if (reason) {
+          text += `\n\nסיבת הדחיה:\n${reason}`;
+        }
+
+        text += '\n\nאם ברצונך לקבל הבהרות נוספות, פנה למנהל.';
+
+        safeSendMail({
+          from: process.env.SMTP_USER || 'no-reply@example.com',
+          to: ruser.email,
+          subject,
+          text
+        }).catch(err => {
+          console.error('mail failed:', err);
+        });
+      }, 0);
+    }
+
+    return res.json({ ok: true });
+
+  } catch (e) {
+    console.error('deny error:', e);
+    return res.status(500).json({ error: 'internal error' });
+  }
+});
 // Allow authenticated user to update their own profile
 // app.put('/api/me', authMiddleware, async (req, res) => {
 //   const uid = req.user.id;
