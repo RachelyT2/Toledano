@@ -1130,9 +1130,9 @@ app.post('/api/request-admin', authMiddleware, async (req, res) => {
     console.log('INSERT RESULT:', rows[0].id);
     const requestId = rows[0].id;
   
-    await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: process.env.ADMIN_EMAIL, subject: subj, text, replyTo: `${user.name} <${user.email}>` });
-    // res.json({ ok: true, requestId: insert.lastID });
-    res.json({ ok: true, requestId });
+    // await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: process.env.ADMIN_EMAIL, subject: subj, text, replyTo: `${user.name} <${user.email}>` });
+    // // res.json({ ok: true, requestId: insert.lastID });
+    // res.json({ ok: true, requestId });
 
   }catch(e){ res.status(500).json({ error: 'failed to send', detail: e.message }); }
 });
