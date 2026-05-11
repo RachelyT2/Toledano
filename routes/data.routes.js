@@ -45,7 +45,7 @@ router.post('/api/send', authMiddleware, upload.array('files'), async (req, res)
       console.error('No resolved recipient email addresses for recipients:', recipients);
       return res.status(400).json({ error: 'no recipient emails resolved' });
     }
-    const serverFrom = process.env.SMTP_USER || 'no-reply@example.com';
+    const serverFrom = process.env.FROM_EMAIL || 'onboarding@resend.dev';
     const replyTo = `${req.user.name} <${req.user.email}>`;
     const fromDisplay = `${req.user.name} דרך המשפחה <${serverFrom}>`;
     const senderLineText = `נשלח על ידי: ${req.user.name} <${req.user.email}>\n\n`;

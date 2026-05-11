@@ -44,7 +44,7 @@ router.post('/api/request-admin', authMiddleware, async (req, res) => {
 
     setTimeout(() => {
       safeSendMail({
-        from: process.env.SMTP_USER || 'no-reply@example.com',
+        from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
         to: process.env.ADMIN_EMAIL,
         subject: subj,
         text,
@@ -195,7 +195,7 @@ router.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
         if (requester && requester.email) {
           runAsync(() =>
             safeSendMail({
-              from: process.env.SMTP_USER || 'no-reply@example.com',
+              from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
               to: requester.email,
               subject: 'בקשתך אושרה',
               text: `שלום ${requester.name || ''},\n\nבקשתך ליצור משתמש אושרה. נוצר משתמש עם מזהה ${result.rows[0].id}.\n\nבברכה, מנהל המערכת.`
@@ -288,7 +288,7 @@ router.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
         if (requester && requester.email) {
           runAsync(() =>
             safeSendMail({
-              from: process.env.SMTP_USER || 'no-reply@example.com',
+              from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
               to: requester.email,
               subject: 'בקשתך אושרה',
               text: `שלום ${requester.name || ''},\n\nבקשתך לערוך משתמש (${targetId}) אושרה והעדכונים בוצעו.\n\nבברכה, מנהל המערכת.`
@@ -340,7 +340,7 @@ router.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
           if (requester && requester.email) {
             runAsync(() =>
               safeSendMail({
-                from: process.env.SMTP_USER || 'no-reply@example.com',
+                from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
                 to: requester.email,
                 subject: 'בקשתך אושרה',
                 text: `שלום ${requester.name || ''},\n\nבקשתך להסיר משתמש אושרה. המשתמש שסומן מכיל ילדים ולכן הוסר כתובת המייל והועלה למצב 'ללא מייל'.\n\nבברכה, מנהל המערכת.`
@@ -394,7 +394,7 @@ router.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
         );
         const requester = requesterRes.rows[0];
         if (requester && requester.email) {
-          await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך למחוק את המשתמש (id: ${targetId}) אושרה והמשתמש הוסר.\n\nבברכה, מנהל המערכת.` });
+          await safeSendMail({ from: process.env.FROM_EMAIL || 'onboarding@resend.dev', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך למחוק את המשתמש (id: ${targetId}) אושרה והמשתמש הוסר.\n\nבברכה, מנהל המערכת.` });
         }
       } catch(_) {}
       return res.json({ ok: true, deletedId: targetId });
@@ -417,7 +417,7 @@ router.post('/api/requests/:id/approve', authMiddleware, async (req, res) => {
         [row.user_id]
       );
       const requester = requesterRes.rows[0];
-      if (requester && requester.email) { await safeSendMail({ from: process.env.SMTP_USER || 'no-reply@example.com', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך אושרה (לאבצע פעולה ספציפית).\n\nבברכה, מנהל המערכת.` }); }
+      if (requester && requester.email) { await safeSendMail({ from: process.env.FROM_EMAIL || 'onboarding@resend.dev', to: requester.email, subject: 'בקשתך אושרה', text: `שלום ${requester.name || ''},\n\nבקשתך אושרה (לאבצע פעולה ספציפית).\n\nבברכה, מנהל המערכת.` }); }
     } catch(_) {}
     return res.json({ ok: true });
 
@@ -501,7 +501,7 @@ router.post('/api/requests/:id/deny', authMiddleware, async (req, res) => {
         text += '\n\nאם ברצונך לקבל הבהרות נוספות, פנה למנהל.';
 
         safeSendMail({
-          from: process.env.SMTP_USER || 'no-reply@example.com',
+          from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
           to: ruser.email,
           subject,
           text
